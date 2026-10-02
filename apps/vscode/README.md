@@ -4,8 +4,8 @@ This optional local extension adds a T3 icon to VS Code's left Activity Bar. Cli
 
 1. Install Node.js 24, `vp`, and the checkout's dependencies (`vp i`) as described in the checkout's `docs/operations/development.md`.
 2. From `apps/vscode`, run `npx @vscode/vsce@4.0.0 package --no-dependencies`.
-3. Install the resulting `.vsix` with VS Code's **Extensions: Install from VSIX...** command, then open the T3 Code repository as a workspace and click the T3 icon. Reload VS Code if it was open during installation.
+3. Install the resulting `.vsix` with VS Code's **Extensions: Install from VSIX...** command, then click the T3 icon. If VS Code is open on another project, select the T3 Code source checkout folder once. Reload VS Code if it was open during installation.
 
-The first click uses the dev server's one-time pairing URL. Later clicks focus the existing browser tab. **Stop source server** in the T3 view shuts down only the process this extension started. The server also stops when the extension host closes. Development state is isolated under this checkout's `.t3/vscode-dev`, never in the installed app's live data directory.
+The selected checkout is remembered across VS Code workspaces. Use **Choose source checkout** in the T3 view to switch it. The first click uses the dev server's one-time pairing URL; later clicks focus the existing browser tab. **Stop source server** shuts down only the process this extension started. The server also stops when the extension host closes. Development state is isolated under the selected checkout's `.t3/vscode-dev`, never in the installed app's live data directory.
 
 The browser is an editor tab rather than the narrow sidebar itself. The Activity Bar view provides **Open T3 Code** and **Stop source server** actions. In a remote VS Code workspace, install the extension on the workspace side so the server runs where the checkout lives. If VS Code cannot find Node.js, set `t3CodeSource.nodePath` to your Node.js 24 executable.
