@@ -2,7 +2,7 @@
   "name": "t3-code-source-dev",
   "displayName": "T3 Code Source Dev",
   "description": "Open the T3 Code source checkout in VS Code without a terminal.",
-  "version": "0.0.1",
+  "version": "0.0.2",
   "publisher": "t3tools",
   "private": true,
   "license": "MIT",
@@ -19,6 +19,7 @@
   "activationEvents": [
     "onView:t3CodeSource.actions",
     "onCommand:t3CodeSource.open",
+    "onCommand:t3CodeSource.chooseCheckout",
     "onCommand:t3CodeSource.stop"
   ],
   "scripts": {
@@ -48,6 +49,11 @@
         "command": "t3CodeSource.open",
         "title": "T3 Code: Open from Source",
         "icon": "$(browser)"
+      },
+      {
+        "command": "t3CodeSource.chooseCheckout",
+        "title": "T3 Code: Choose Source Checkout",
+        "icon": "$(folder-opened)"
       },
       {
         "command": "t3CodeSource.stop",
