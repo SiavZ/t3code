@@ -3,11 +3,7 @@ import * as NodeHttp from "node:http";
 
 import * as NodeHttpServer from "@effect/platform-node/NodeHttpServer";
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import {
-  EnvironmentHttpApi,
-  ProviderDriverKind,
-  type RepositoryIdentity,
-} from "@t3tools/contracts";
+import { EnvironmentHttpApi, type RepositoryIdentity } from "@t3tools/contracts";
 import type { RelayManagedEndpointRuntimeConfig } from "@t3tools/contracts/relay";
 import * as Cause from "effect/Cause";
 import * as Clock from "effect/Clock";
@@ -164,6 +160,8 @@ import * as ResourceTelemetry from "./resourceTelemetry/ResourceTelemetry.ts";
 import * as UsageLimitSources from "./usage/UsageLimitSources.ts";
 import * as UsageService from "./usage/UsageService.ts";
 import { OrchestrationLayerLive } from "./orchestration/runtimeLayer.ts";
+import * as OwnedWorkers from "./orchestration/OwnedWorkers.ts";
+import * as ProjectionSnapshotQuery from "./orchestration/Services/ProjectionSnapshotQuery.ts";
 import {
   clearPersistedServerRuntimeState,
   makePersistedServerRuntimeState,
@@ -594,6 +592,17 @@ const commandReadinessLayer = HttpRouter.middleware(
   { global: true },
 );
 
+const McpSessionRegistryLive = Layer.unwrap(
+  Effect.gen(function* () {
+    const snapshots = yield* ProjectionSnapshotQuery.ProjectionSnapshotQuery;
+    const settings = yield* ServerSettings.ServerSettingsService;
+    return McpSessionRegistry.layer.pipe(
+      Layer.provide(Layer.succeed(ProjectionSnapshotQuery.ProjectionSnapshotQuery, snapshots)),
+      Layer.provide(Layer.succeed(ServerSettings.ServerSettingsService, settings)),
+    );
+  }),
+);
+
 export const makeRoutesLayer = Layer.mergeAll(
   Layer.mergeAll(
     HttpApiBuilder.layer(EnvironmentHttpApi).pipe(
@@ -611,13 +620,14 @@ export const makeRoutesLayer = Layer.mergeAll(
     staticAndDevRouteLayer,
     websocketRpcRouteLayer,
   ),
-  McpHttpServer.layer.pipe(Layer.provide(McpSessionRegistry.layer)),
+  McpHttpServer.layer.pipe(Layer.provide(McpSessionRegistryLive)),
   // Last, so no route layer can replace the server's one TracerDisabledWhen.
   untracedRequestsLayer,
 ).pipe(
   // Both transports consume the same service instance, so caches single-flight across clients
   // and mutations observed on WebSocket invalidate patches subsequently read over HTTP.
   Layer.provide(PullRequestServiceLive),
+  Layer.provideMerge(OwnedWorkers.layer),
   Layer.provide(PreviewAutomationBroker.layer),
   Layer.provide(ServerSelfUpdate.layer.pipe(Layer.provide(DesktopAppUpdateLayerLive))),
   Layer.provide(commandReadinessLayer),

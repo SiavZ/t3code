@@ -104,6 +104,7 @@ import {
   normalizeDispatchCommand,
 } from "./orchestration/Normalizer.ts";
 import * as OrchestrationEngine from "./orchestration/Services/OrchestrationEngine.ts";
+import * as OwnedWorkers from "./orchestration/OwnedWorkers.ts";
 import * as ProjectionSnapshotQuery from "./orchestration/Services/ProjectionSnapshotQuery.ts";
 import { ThreadDeletionReactor } from "./orchestration/Services/ThreadDeletionReactor.ts";
 import {
@@ -522,6 +523,7 @@ const makeWsRpcLayer = (
               Effect.orElseSucceed(() => null),
             );
       const orchestrationEngine = yield* OrchestrationEngine.OrchestrationEngineService;
+      const ownedWorkers = yield* OwnedWorkers.OwnedWorkers;
       const threadDeletionReactor = yield* ThreadDeletionReactor;
       const analytics = yield* AnalyticsService.AnalyticsService;
       // Every command dispatched on this connection carries the connecting
@@ -2224,6 +2226,30 @@ const makeWsRpcLayer = (
             ),
             { "rpc.aggregate": "orchestration" },
           ),
+        [WS_METHODS.workersSpawn]: (input) =>
+          observeRpcEffect(WS_METHODS.workersSpawn, ownedWorkers.spawn(input), {
+            "rpc.aggregate": "workers",
+          }),
+        [WS_METHODS.workersList]: (input) =>
+          observeRpcEffect(WS_METHODS.workersList, ownedWorkers.list(input), {
+            "rpc.aggregate": "workers",
+          }),
+        [WS_METHODS.workersGet]: (input) =>
+          observeRpcEffect(WS_METHODS.workersGet, ownedWorkers.get(input), {
+            "rpc.aggregate": "workers",
+          }),
+        [WS_METHODS.workersSend]: (input) =>
+          observeRpcEffect(WS_METHODS.workersSend, ownedWorkers.send(input), {
+            "rpc.aggregate": "workers",
+          }),
+        [WS_METHODS.workersStop]: (input) =>
+          observeRpcEffect(WS_METHODS.workersStop, ownedWorkers.stop(input), {
+            "rpc.aggregate": "workers",
+          }),
+        [WS_METHODS.workersWait]: (input) =>
+          observeRpcEffect(WS_METHODS.workersWait, ownedWorkers.wait(input), {
+            "rpc.aggregate": "workers",
+          }),
         [ORCHESTRATION_WS_METHODS.getWorkflowScript]: (input) =>
           observeRpcEffect(
             ORCHESTRATION_WS_METHODS.getWorkflowScript,
@@ -4108,6 +4134,7 @@ export const websocketRpcRouteLayer = Layer.unwrap(
         ),
     });
     const pullRequests = yield* PullRequestService.PullRequestService;
+    const ownedWorkers = yield* OwnedWorkers.OwnedWorkers;
     const sql = yield* SqlClient.SqlClient;
     return HttpRouter.add(
       "GET",
@@ -4156,6 +4183,7 @@ export const websocketRpcRouteLayer = Layer.unwrap(
               // One server-lifetime service means clients share the same PR caches, and a WS
               // mutation invalidates the HTTP diff cache that every client reads from.
               Layer.provide(Layer.succeed(PullRequestService.PullRequestService, pullRequests)),
+              Layer.provide(Layer.succeed(OwnedWorkers.OwnedWorkers, ownedWorkers)),
               Layer.provide(
                 SourceControlDiscovery.layer.pipe(
                   Layer.provide(

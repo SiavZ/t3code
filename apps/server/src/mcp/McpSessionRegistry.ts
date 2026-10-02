@@ -16,6 +16,7 @@ export interface McpCredentialRequest {
   readonly threadId: ThreadId;
   readonly providerInstanceId: ProviderInstanceId;
   readonly capabilities: ReadonlySet<McpInvocationContext.McpCapability>;
+  readonly capabilityCeiling?: ReadonlySet<McpInvocationContext.McpCapability>;
 }
 
 export interface McpIssuedCredential {
@@ -33,6 +34,10 @@ export interface McpSessionRegistryShape {
    * credential even when it goes a long time without touching an MCP tool.
    */
   readonly touch: (threadId: ThreadId) => Effect.Effect<void>;
+  readonly restrictThreadCapabilities: (
+    threadId: ThreadId,
+    capabilities: ReadonlySet<McpInvocationContext.McpCapability>,
+  ) => Effect.Effect<void>;
   readonly revokeProviderSession: (providerSessionId: string) => Effect.Effect<void>;
   readonly revokeThread: (threadId: ThreadId) => Effect.Effect<void>;
   readonly revokeAll: Effect.Effect<void>;
@@ -93,6 +98,7 @@ const makeWithOptions = Effect.fn("McpSessionRegistry.make")(function* (
   const environment = yield* ServerEnvironment.ServerEnvironment;
   const environmentId = yield* environment.getEnvironmentId;
   const httpServer = yield* HttpServer.HttpServer;
+  const threadCapabilities = yield* McpInvocationContext.makeThreadMcpCapabilities;
   const state = yield* SynchronizedRef.make<RegistryState>({ records: new Map() });
   const currentTimeMillis = options.now ? Effect.sync(options.now) : Clock.currentTimeMillis;
   const livenessWindowMs = options.livenessWindowMs ?? DEFAULT_LIVENESS_WINDOW_MS;
@@ -120,15 +126,19 @@ const makeWithOptions = Effect.fn("McpSessionRegistry.make")(function* (
       const providerSessionId = yield* crypto.randomUUIDv4.pipe(Effect.orDie);
       const rawToken = yield* crypto.randomBytes(32).pipe(Effect.map(tokenFromBytes), Effect.orDie);
       const tokenHash = yield* hashToken(rawToken);
+      const liveCapabilities = yield* threadCapabilities(request.threadId);
       const scope: McpInvocationContext.McpInvocationScope = {
         environmentId,
         threadId: ThreadId.make(request.threadId),
         providerSessionId,
         providerInstanceId: ProviderInstanceId.make(request.providerInstanceId),
-        capabilities: new Set<McpInvocationContext.McpCapability>([
-          "pull-requests",
-          ...request.capabilities,
-        ]),
+        capabilities: new Set<McpInvocationContext.McpCapability>(
+          ["pull-requests" as const, ...request.capabilities].filter(
+            (capability) =>
+              (request.capabilityCeiling?.has(capability) ?? true) &&
+              (liveCapabilities?.has(capability) ?? true),
+          ),
+        ),
         issuedAt,
       };
       yield* SynchronizedRef.update(state, ({ records }) => {
@@ -155,13 +165,28 @@ const makeWithOptions = Effect.fn("McpSessionRegistry.make")(function* (
       if (rawToken.length === 0) return undefined;
       const tokenHash = yield* hashToken(rawToken);
       const timestamp = yield* currentTimeMillis;
+      const record = yield* SynchronizedRef.get(state).pipe(
+        Effect.map(({ records }) => records.get(tokenHash)),
+      );
+      if (!record) return undefined;
+      const liveCapabilities = yield* threadCapabilities(record.scope.threadId);
       return yield* SynchronizedRef.modify(state, ({ records }) => {
         const current = pruneDead(records, timestamp);
         const record = current.get(tokenHash);
         if (!record) return [undefined, { records: current }] as const;
         const next = new Map(current);
-        next.set(tokenHash, { ...record, lastAliveAt: timestamp });
-        return [record.scope, { records: next }] as const;
+        const scope = liveCapabilities
+          ? {
+              ...record.scope,
+              capabilities: new Set(
+                [...record.scope.capabilities].filter((capability) =>
+                  liveCapabilities.has(capability),
+                ),
+              ),
+            }
+          : record.scope;
+        next.set(tokenHash, { ...record, scope, lastAliveAt: timestamp });
+        return [scope, { records: next }] as const;
       });
     },
   );
@@ -191,6 +216,30 @@ const makeWithOptions = Effect.fn("McpSessionRegistry.make")(function* (
     issue,
     resolve,
     touch,
+    restrictThreadCapabilities: Effect.fn("McpSessionRegistry.restrictThreadCapabilities")(
+      function* (threadId, capabilities) {
+        yield* SynchronizedRef.update(state, ({ records }) => ({
+          records: new Map(
+            Array.from(records, ([tokenHash, record]) => [
+              tokenHash,
+              record.scope.threadId === threadId
+                ? {
+                    ...record,
+                    scope: {
+                      ...record.scope,
+                      capabilities: new Set(
+                        [...record.scope.capabilities].filter((capability) =>
+                          capabilities.has(capability),
+                        ),
+                      ),
+                    },
+                  }
+                : record,
+            ]),
+          ),
+        }));
+      },
+    ),
     revokeProviderSession: Effect.fn("McpSessionRegistry.revokeProviderSession")(
       function* (providerSessionId) {
         yield* revokeWhere((record) => record.scope.providerSessionId === providerSessionId);
@@ -238,6 +287,14 @@ export const issueActiveMcpCredential = (
  */
 export const touchActiveMcpThread = (threadId: ThreadId): Effect.Effect<void> =>
   activeMcpSessionRegistry ? activeMcpSessionRegistry.touch(threadId) : Effect.void;
+
+export const restrictActiveMcpThreadCapabilities = (
+  threadId: ThreadId,
+  capabilities: ReadonlySet<McpInvocationContext.McpCapability>,
+): Effect.Effect<void> =>
+  activeMcpSessionRegistry
+    ? activeMcpSessionRegistry.restrictThreadCapabilities(threadId, capabilities)
+    : Effect.void;
 
 export const revokeActiveMcpThread = (threadId: ThreadId): Effect.Effect<void> =>
   activeMcpSessionRegistry ? activeMcpSessionRegistry.revokeThread(threadId) : Effect.void;

@@ -101,6 +101,7 @@ const SUCCESSFUL_GIT_EXECUTION = {
 const decodeTransferThreadSnapshot = Schema.decodeUnknownEffect(
   Schema.fromJsonString(OrchestrationThreadDetailSnapshot),
 );
+const decodeOrchestrationShellSnapshot = Schema.decodeUnknownEffect(OrchestrationShellSnapshot);
 const decodeTransferShellSnapshot = Schema.decodeUnknownEffect(
   Schema.fromJsonString(OrchestrationShellSnapshot),
 );
@@ -200,6 +201,7 @@ import * as AnalyticsService from "./telemetry/AnalyticsService.ts";
 import * as Data from "effect/Data";
 
 import { makeOrchestrationIntegrationHarness } from "../integration/OrchestrationEngineHarness.integration.ts";
+import { codexTurnTextFixture } from "../integration/fixtures/providerRuntime.ts";
 import {
   measureHttpGet,
   openMeasuredWsClient,
@@ -13239,6 +13241,129 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 });
+
+it.live("delegates through worker RPC and exposes workers as normal threads", () =>
+  Effect.acquireUseRelease(
+    makeOrchestrationIntegrationHarness(),
+    (harness) =>
+      Effect.gen(function* () {
+        const projectId = ProjectId.make("worker-rpc-project");
+        const callerThreadId = ThreadId.make("worker-rpc-owner");
+        const otherThreadId = ThreadId.make("worker-rpc-other-owner");
+        const createdAt = "2026-10-02T00:00:00.000Z";
+        yield* harness.engine.dispatch({
+          type: "project.create",
+          commandId: CommandId.make("worker-rpc-project-create"),
+          projectId,
+          title: "Worker RPC",
+          workspaceRoot: harness.workspaceDir,
+          createdAt,
+        });
+        for (const threadId of [callerThreadId, otherThreadId]) {
+          yield* harness.engine.dispatch({
+            type: "thread.create",
+            commandId: CommandId.make(`worker-rpc-create:${threadId}`),
+            threadId,
+            projectId,
+            title: "Owner",
+            modelSelection: defaultModelSelection,
+            runtimeMode: "approval-required",
+            interactionMode: "default",
+            branch: "main",
+            worktreePath: null,
+            createdAt,
+          });
+        }
+        const adapter = harness.adapterHarness;
+        if (!adapter) return yield* Effect.die("Expected the isolated test provider adapter.");
+        yield* adapter.queueTurnResponseForNextSession({ events: codexTurnTextFixture });
+        yield* buildAppUnderTest({
+          layers: {
+            orchestrationEngine: harness.engine,
+            projectionSnapshotQuery: harness.snapshotQuery,
+          },
+        });
+        const wsUrl = yield* getWsServerUrl("/ws");
+        yield* Effect.scoped(
+          withWsRpcClient(wsUrl, (client) =>
+            Effect.gen(function* () {
+              const input = {
+                commandId: CommandId.make("worker-rpc-spawn"),
+                callerThreadId,
+                label: "Reviewer",
+                prompt: "Review the current checkout without editing files.",
+                modelSelection: defaultModelSelection,
+              };
+              const spawned = yield* client[WS_METHODS.workersSpawn](input);
+              assert.deepEqual(yield* client[WS_METHODS.workersSpawn](input), spawned);
+              const target = { callerThreadId, workerThreadId: spawned.workerThreadId };
+              const settled = yield* client[WS_METHODS.workersWait]({
+                callerThreadId,
+                workerThreadIds: [spawned.workerThreadId],
+                mode: "all",
+                timeoutMs: 10_000,
+              });
+              assert.isFalse(settled.timedOut, JSON.stringify(settled.workers));
+              assert.equal(settled.workers[0]?.status, "completed");
+              const listed = yield* client[WS_METHODS.workersList]({ callerThreadId });
+              assert.isFalse(listed.truncated);
+              assert.equal(listed.workers[0]?.threadId, spawned.workerThreadId);
+              const detail = yield* client[WS_METHODS.workersGet]({ ...target, turnLimit: 1 });
+              assert.equal(detail.detail.thread.worker?.ownerThreadId, callerThreadId);
+              assert.equal(detail.detail.thread.worktreePath, null);
+              assert.equal(
+                detail.detail.thread.messages.find((message) => message.role === "user")?.text,
+                input.prompt,
+              );
+
+              const response = yield* HttpClient.get("/api/orchestration/shell", {
+                headers: { cookie: yield* getAuthenticatedSessionCookieHeader() },
+              });
+              const shell = yield* decodeOrchestrationShellSnapshot(
+                yield* responseJsonEffect(response),
+              );
+              assert.equal(
+                shell.threads.find((thread) => thread.id === spawned.workerThreadId)?.worker?.label,
+                "Reviewer",
+              );
+
+              const denied = yield* client[WS_METHODS.workersGet]({
+                callerThreadId: otherThreadId,
+                workerThreadId: spawned.workerThreadId,
+              }).pipe(Effect.result);
+              assert.equal(denied._tag, "Failure");
+              if (denied._tag === "Failure") {
+                assert.equal(denied.failure._tag, "WorkerOperationError");
+                if (denied.failure._tag === "WorkerOperationError")
+                  assert.equal(denied.failure.code, "forbidden");
+              }
+              yield* client[WS_METHODS.workersStop]({
+                ...target,
+                commandId: CommandId.make("worker-rpc-stop"),
+              });
+              yield* harness.drainProviderRuntime;
+              assert.equal((yield* client[WS_METHODS.workersGet](target)).worker.status, "stopped");
+              yield* adapter.queueTurnResponseForNextSession({ events: codexTurnTextFixture });
+              yield* client[WS_METHODS.workersSend]({
+                ...target,
+                commandId: CommandId.make("worker-rpc-followup"),
+                text: "Review again.",
+              });
+              const resumed = yield* client[WS_METHODS.workersWait]({
+                callerThreadId,
+                workerThreadIds: [spawned.workerThreadId],
+                mode: "all",
+                timeoutMs: 10_000,
+              });
+              assert.isFalse(resumed.timedOut);
+              assert.equal(resumed.workers[0]?.status, "completed");
+            }),
+          ),
+        );
+      }),
+    (harness) => harness.dispose,
+  ).pipe(Effect.provide(NodeHttpServer.layerTest), Effect.provide(NodeServices.layer)),
+);
 
 it.live(
   "reports thread HTTP and WebSocket transfer budgets",

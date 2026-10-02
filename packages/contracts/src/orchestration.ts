@@ -133,6 +133,32 @@ export const RuntimeMode = Schema.Literals([
 ]);
 export type RuntimeMode = typeof RuntimeMode.Type;
 export const DEFAULT_RUNTIME_MODE: RuntimeMode = "full-access";
+export const WorkerMcpCapability = Schema.Literals([
+  "preview",
+  "device",
+  "pull-requests",
+  "workers",
+]);
+export type WorkerMcpCapability = typeof WorkerMcpCapability.Type;
+
+/** Automatic approval and automatic edits are distinct policies, not ordered privilege levels. */
+export function isWorkerRuntimeModeAllowed(requested: RuntimeMode, ceiling: RuntimeMode): boolean {
+  return requested === ceiling || requested === "approval-required" || ceiling === "full-access";
+}
+
+export const ThreadWorkerMetadata = Schema.Struct({
+  ownerThreadId: ThreadId,
+  rootThreadId: ThreadId,
+  depth: PositiveInt.check(Schema.isLessThanOrEqualTo(2)),
+  spawnCommandId: CommandId,
+  spawnFingerprint: TrimmedNonEmptyString,
+  label: TrimmedNonEmptyString.check(Schema.isMaxLength(80)),
+  runtimeModeCeiling: RuntimeMode,
+  mcpCapabilityCeiling: Schema.Array(WorkerMcpCapability),
+  stopRequestedAt: Schema.NullOr(IsoDateTime),
+  lastStopSequence: Schema.NullOr(NonNegativeInt),
+});
+export type ThreadWorkerMetadata = typeof ThreadWorkerMetadata.Type;
 export const ProviderInteractionMode = Schema.Literals(["default", "plan"]);
 export type ProviderInteractionMode = typeof ProviderInteractionMode.Type;
 export const DEFAULT_PROVIDER_INTERACTION_MODE: ProviderInteractionMode = "default";
@@ -792,6 +818,7 @@ export type ThreadPullRequestLink = typeof ThreadPullRequestLink.Type;
 
 export const OrchestrationThread = Schema.Struct({
   id: ThreadId,
+  worker: Schema.optional(Schema.NullOr(ThreadWorkerMetadata)),
   projectId: ProjectId,
   title: TrimmedNonEmptyString,
   modelSelection: ModelSelection,
@@ -882,6 +909,7 @@ export const OrchestrationProjectShell = Schema.Struct({
 export type OrchestrationProjectShell = typeof OrchestrationProjectShell.Type;
 
 export const OrchestrationThreadShell = Schema.Struct({
+  worker: Schema.optional(Schema.NullOr(ThreadWorkerMetadata)),
   id: ThreadId,
   projectId: ProjectId,
   title: TrimmedNonEmptyString,
@@ -1658,7 +1686,40 @@ const ThreadPullRequestLinkSyncCommand = Schema.Struct({
   stack: Schema.NullOr(ThreadPullRequestStack),
 });
 
+const ThreadWorkerSpawnCommand = Schema.Struct({
+  type: Schema.Literal("thread.worker.spawn"),
+  commandId: CommandId,
+  threadId: ThreadId,
+  callerThreadId: ThreadId,
+  label: ThreadWorkerMetadata.fields.label,
+  prompt: TrimmedNonEmptyString.check(Schema.isMaxLength(PROVIDER_SEND_TURN_MAX_INPUT_CHARS)),
+  modelSelection: ModelSelection,
+  mcpCapabilityCeiling: Schema.Array(WorkerMcpCapability),
+  spawnFingerprint: TrimmedNonEmptyString,
+  createdAt: IsoDateTime,
+});
+
+const ThreadWorkerSendCommand = Schema.Struct({
+  type: Schema.Literal("thread.worker.send"),
+  commandId: CommandId,
+  threadId: ThreadId,
+  callerThreadId: ThreadId,
+  text: TrimmedNonEmptyString.check(Schema.isMaxLength(PROVIDER_SEND_TURN_MAX_INPUT_CHARS)),
+  createdAt: IsoDateTime,
+});
+
+const ThreadWorkerStopCommand = Schema.Struct({
+  type: Schema.Literal("thread.worker.stop"),
+  commandId: CommandId,
+  threadId: ThreadId,
+  callerThreadId: ThreadId,
+  createdAt: IsoDateTime,
+});
+
 const InternalOrchestrationCommand = Schema.Union([
+  ThreadWorkerSpawnCommand,
+  ThreadWorkerSendCommand,
+  ThreadWorkerStopCommand,
   ThreadAutoSettleCommand,
   ThreadPullRequestSyncCommand,
   ThreadPullRequestLinkSyncCommand,
@@ -1763,6 +1824,7 @@ export const ProjectDeletedPayload = Schema.Struct({
 
 export const ThreadCreatedPayload = Schema.Struct({
   threadId: ThreadId,
+  worker: Schema.optional(Schema.NullOr(ThreadWorkerMetadata)),
   projectId: ProjectId,
   title: TrimmedNonEmptyString,
   modelSelection: ModelSelection,
@@ -2013,6 +2075,13 @@ export const OrchestrationClientOrigin = Schema.Struct({
 export type OrchestrationClientOrigin = typeof OrchestrationClientOrigin.Type;
 
 export const OrchestrationEventMetadata = Schema.Struct({
+  workerCommand: Schema.optional(
+    Schema.Struct({
+      type: Schema.Literals(["thread.worker.spawn", "thread.worker.send", "thread.worker.stop"]),
+      callerThreadId: ThreadId,
+      fingerprint: TrimmedNonEmptyString,
+    }),
+  ),
   providerTurnId: Schema.optional(TrimmedNonEmptyString),
   providerItemId: Schema.optional(ProviderItemId),
   adapterKey: Schema.optional(TrimmedNonEmptyString),

@@ -605,6 +605,33 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
       "applyThreadsProjection",
     )(function* (event, attachmentSideEffects) {
       switch (event.type) {
+        case "thread.session-stop-requested":
+        case "thread.turn-start-requested": {
+          const existing = yield* projectionThreadRepository.getById({
+            threadId: event.payload.threadId,
+          });
+          if (Option.isNone(existing) || !existing.value.worker) return;
+          const worker = existing.value.worker;
+          yield* projectionThreadRepository.upsert({
+            ...existing.value,
+            worker:
+              event.type === "thread.session-stop-requested"
+                ? {
+                    ...worker,
+                    stopRequestedAt: event.payload.createdAt,
+                    lastStopSequence: event.sequence,
+                  }
+                : {
+                    ...worker,
+                    stopRequestedAt:
+                      event.sequence > (worker.lastStopSequence ?? -1)
+                        ? null
+                        : worker.stopRequestedAt,
+                  },
+            updatedAt: event.payload.createdAt,
+          });
+          return;
+        }
         case "thread.created":
           // A draft retry can re-create this id; links belong to the old incarnation.
           yield* projectionThreadPullRequestRepository.deleteByThreadId({
@@ -614,6 +641,7 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
             threadId: event.payload.threadId,
             projectId: event.payload.projectId,
             title: event.payload.title,
+            worker: event.payload.worker ?? null,
             modelSelection: event.payload.modelSelection,
             runtimeMode: event.payload.runtimeMode,
             interactionMode: event.payload.interactionMode,
@@ -1379,6 +1407,17 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
       "applyThreadTurnsProjection",
     )(function* (event, _attachmentSideEffects) {
       switch (event.type) {
+        case "thread.session-stop-requested": {
+          const thread = yield* projectionThreadRepository.getById({
+            threadId: event.payload.threadId,
+          });
+          if (Option.isSome(thread) && thread.value.worker) {
+            yield* projectionTurnRepository.deletePendingTurnStartByThreadId({
+              threadId: event.payload.threadId,
+            });
+          }
+          return;
+        }
         case "thread.created":
           yield* projectionTurnRepository.deleteByThreadId({
             threadId: event.payload.threadId,

@@ -18,6 +18,8 @@ import {
   ProviderRespondToRequestInput,
   ProviderRespondToUserInputInput,
   RuntimeRequestId,
+  RuntimeMode,
+  isWorkerRuntimeModeAllowed,
   ProviderSendTurnInput,
   type ChatImageAttachment,
   type SnapShotAccessibility,
@@ -36,10 +38,12 @@ import {
   type ServerSettings as ServerSettingsValue,
 } from "@t3tools/contracts";
 import { expandAssistantCitationsForProvider } from "@t3tools/shared/assistantCitations";
+import { parseCliArgs, tokenizeCliArgs } from "@t3tools/shared/cliArgs";
 import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
 import { causeErrorTag } from "@t3tools/shared/observability";
 import { getModelSelectionStringOptionValue } from "@t3tools/shared/model";
 import { resolveProjectSettings } from "@t3tools/shared/projectSettings";
+import * as Cause from "effect/Cause";
 import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
@@ -58,7 +62,7 @@ import { resolveAttachmentPath } from "../../attachmentStore.ts";
 import * as ServerConfig from "../../config.ts";
 import * as DeviceService from "../../device/DeviceService.ts";
 import { ensureAgentDeviceShim } from "../../device/AgentDeviceShim.ts";
-import type * as McpInvocationContext from "../../mcp/McpInvocationContext.ts";
+import * as McpInvocationContext from "../../mcp/McpInvocationContext.ts";
 import {
   increment,
   providerMetricAttributes,
@@ -87,6 +91,10 @@ import * as McpSessionRegistry from "../../mcp/McpSessionRegistry.ts";
 import * as ServerSettings from "../../serverSettings.ts";
 import * as ProjectionSnapshotQuery from "../../orchestration/Services/ProjectionSnapshotQuery.ts";
 const isModelSelection = Schema.is(ModelSelection);
+const isRuntimeMode = Schema.is(RuntimeMode);
+const decodeWorkerLaunchConfig = Schema.decodeUnknownEffect(
+  Schema.Struct({ launchArgs: Schema.optional(Schema.String) }),
+);
 const encodePromptJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
 
 interface SnapShotPromptAccessibilityNode {
@@ -882,61 +890,192 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
     });
     yield* recordCompletedTurnProperties(properties);
   });
-  /**
-   * Whether the credential minted below may drive the user's browser.
-   *
-   * Deny on an unreadable settings file rather than letting the read failure
-   * escape: adding `ServerSettingsError` to `ProviderServiceError` would widen
-   * a union every caller handles, for a branch that only decides whether one
-   * optional toolset is attached. Denying is the safe direction — an explicit
-   * "off" silently becoming "on" would violate the user's stated choice,
-   * whereas the reverse costs an agent one toolset and is visible immediately.
-   */
-  const agentAccessSettings = Effect.fn("ProviderService.agentAccessSettings")(
-    function* (threadId: ThreadId) {
-      const settings = yield* serverSettings.getSettings;
-      const entries = Object.values(settings.projectSettingsOverrides);
-      const browserOverridden = entries.some(
-        (entry) => entry.enableAgentBrowserAccess !== undefined,
-      );
-      const deviceOverridden = entries.some((entry) => entry.enableAgentDeviceAccess !== undefined);
-      const environment = {
-        browser: settings.enableAgentBrowserAccess,
-        device: settings.enableAgentDeviceAccess,
-      };
-      if (!browserOverridden && !deviceOverridden) return environment;
-      // Provider-only runtimes may omit orchestration. An unresolved project
-      // must not bypass an explicit project override, but a capability no
-      // project overrides keeps its environment value.
-      const denied = {
-        browser: browserOverridden ? false : environment.browser,
-        device: deviceOverridden ? false : environment.device,
-      };
-      if (Option.isNone(projectionQuery)) return denied;
-      const thread = yield* projectionQuery.value.getThreadShellById(threadId);
-      if (Option.isNone(thread)) return denied;
-      const resolved = resolveProjectSettings(settings, thread.value.projectId).settings;
-      return {
-        browser: resolved.enableAgentBrowserAccess,
-        device: resolved.enableAgentDeviceAccess,
-      };
-    },
-    Effect.catch((cause) =>
-      Effect.logWarning(
-        "Could not read server settings; withholding agent browser and device access for this session.",
-        { cause },
-      ).pipe(Effect.as({ browser: false, device: false })),
-    ),
-  );
-
+  const threadMcpCapabilities = yield* McpInvocationContext.makeThreadMcpCapabilities;
   const agentAccessCapabilities = Effect.fn("ProviderService.agentAccessCapabilities")(function* (
     threadId: ThreadId,
   ) {
-    const capabilities = new Set<McpInvocationContext.McpCapability>(["pull-requests"]);
-    const access = yield* agentAccessSettings(threadId);
-    if (access.browser) capabilities.add("preview");
-    if (access.device) capabilities.add("device");
-    return capabilities;
+    return (
+      (yield* threadMcpCapabilities(threadId)) ?? new Set<McpInvocationContext.McpCapability>()
+    );
+  });
+
+  const requireWorkerRuntimeMode = Effect.fn("ProviderService.requireWorkerRuntimeMode")(function* (
+    threadId: ThreadId,
+    requested: unknown,
+    operation: string,
+    instanceId?: ProviderInstanceId,
+  ) {
+    if (Option.isNone(projectionQuery)) return;
+    const initial = yield* projectionQuery.value
+      .getThreadShellById(threadId)
+      .pipe(
+        Effect.mapError((cause) =>
+          toValidationError(operation, "Could not verify worker permissions.", cause),
+        ),
+      );
+    if (Option.isNone(initial)) {
+      const metadata = yield* projectionQuery.value
+        .getWorkerSpawnMetadata(threadId)
+        .pipe(
+          Effect.mapError((cause) =>
+            toValidationError(operation, "Could not verify worker identity.", cause),
+          ),
+        );
+      if (Option.isSome(metadata)) {
+        return yield* toValidationError(
+          operation,
+          "Deleted workers cannot start or resume execution.",
+        );
+      }
+      return;
+    }
+    if (!initial.value.worker) return;
+    if (initial.value.worker.stopRequestedAt !== null) {
+      return yield* toValidationError(
+        operation,
+        "Worker execution was stopped. Send an explicit follow-up to resume it.",
+      );
+    }
+    if (!isRuntimeMode(requested)) {
+      return yield* toValidationError(operation, "Worker runtime mode is invalid.");
+    }
+    let current = initial.value;
+    const visited = new Set<ThreadId>();
+    while (current.worker) {
+      const metadata = current.worker;
+      if (
+        visited.has(current.id) ||
+        visited.size >= 2 ||
+        !isWorkerRuntimeModeAllowed(requested, metadata.runtimeModeCeiling)
+      ) {
+        return yield* toValidationError(
+          operation,
+          "Worker runtime mode exceeds its inherited ceiling.",
+        );
+      }
+      visited.add(current.id);
+      const owner = yield* projectionQuery.value
+        .getThreadShellById(metadata.ownerThreadId)
+        .pipe(
+          Effect.mapError((cause) =>
+            toValidationError(operation, "Could not verify worker owner permissions.", cause),
+          ),
+        );
+      if (
+        Option.isNone(owner) ||
+        owner.value.projectId !== initial.value.projectId ||
+        !isWorkerRuntimeModeAllowed(requested, owner.value.runtimeMode)
+      ) {
+        return yield* toValidationError(
+          operation,
+          "Worker runtime mode exceeds its owner's permissions.",
+        );
+      }
+      current = owner.value;
+    }
+    if (current.id !== initial.value.worker.rootThreadId) {
+      return yield* toValidationError(operation, "Worker root does not match its ownership chain.");
+    }
+    if (instanceId && requested !== "full-access") {
+      const settings = yield* serverSettings.getSettings.pipe(
+        Effect.mapError((cause) =>
+          toValidationError(operation, "Could not verify worker provider configuration.", cause),
+        ),
+      );
+      const instance = settings.providerInstances[instanceId];
+      const info = yield* registry.getInstanceInfo(instanceId);
+      const config =
+        instance?.config ??
+        (info.driverKind === "claudeAgent"
+          ? settings.providers.claudeAgent
+          : info.driverKind === "codex"
+            ? settings.providers.codex
+            : {});
+      const launch = yield* decodeWorkerLaunchConfig(config).pipe(
+        Effect.mapError((cause) =>
+          toValidationError(operation, "Could not verify worker launch arguments.", cause),
+        ),
+      );
+      const environmentArgs = instance?.environment?.find(
+        (entry) => entry.name === "T3CODE_CODEX_LAUNCH_ARGS",
+      )?.value;
+      const args =
+        info.driverKind === "codex"
+          ? environmentArgs?.trim() ||
+            process.env.T3CODE_CODEX_LAUNCH_ARGS?.trim() ||
+            launch.launchArgs ||
+            ""
+          : launch.launchArgs || "";
+      const flags = parseCliArgs(args).flags;
+      const permissionMode = flags["permission-mode"];
+      const mode =
+        permissionMode === "acceptEdits"
+          ? "auto-accept-edits"
+          : permissionMode === "auto"
+            ? "auto"
+            : permissionMode === "default" || permissionMode === "plan"
+              ? "approval-required"
+              : permissionMode !== undefined
+                ? "full-access"
+                : requested;
+      const tokens = tokenizeCliArgs(args);
+      const permissionOverride = tokens.some((token, index) => {
+        if (/^--(?:yolo|dangerously-bypass-approvals-and-sandbox)(?:=|$)/.test(token)) return true;
+        if (token === "--full-auto")
+          return !isWorkerRuntimeModeAllowed("auto-accept-edits", requested);
+        const value =
+          token === "--config" || token === "-c"
+            ? tokens[index + 1]
+            : token.startsWith("--config=")
+              ? token.slice(9)
+              : token.startsWith("-c=")
+                ? token.slice(3)
+                : undefined;
+        if (value !== undefined) {
+          if (/^permissions(?:\.|=)/.test(value)) return true;
+          if (value.startsWith("sandbox_mode="))
+            return (
+              value.includes("danger-full-access") ||
+              (requested === "approval-required" && value.includes("workspace-write"))
+            );
+          if (value.startsWith("approval_policy="))
+            return (
+              /(?:never|on-failure)/.test(value) ||
+              (requested === "approval-required" && value.includes("on-request"))
+            );
+        }
+        const sandbox =
+          token === "--sandbox"
+            ? tokens[index + 1]
+            : token.startsWith("--sandbox=")
+              ? token.slice(10)
+              : undefined;
+        const approval =
+          token === "--ask-for-approval"
+            ? tokens[index + 1]
+            : token.startsWith("--ask-for-approval=")
+              ? token.slice(19)
+              : undefined;
+        return (
+          sandbox === "danger-full-access" ||
+          approval === "never" ||
+          approval === "on-failure" ||
+          (requested === "approval-required" &&
+            (sandbox === "workspace-write" || approval === "on-request"))
+        );
+      });
+      if (
+        !isWorkerRuntimeModeAllowed(mode, requested) ||
+        (flags["dangerously-skip-permissions"] !== undefined &&
+          flags["dangerously-skip-permissions"] !== "false") ||
+        permissionOverride
+      ) {
+        return yield* toValidationError(
+          operation,
+          "Configured provider launch arguments may exceed worker permissions. Remove permission overrides for this provider instance.",
+        );
+      }
+    }
   });
 
   /** Install only the local CLI here. device_open supplies a separate config for each host. */
@@ -969,7 +1108,12 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
   const prepareMcpSession = (threadId: ThreadId, providerInstanceId: ProviderInstanceId) =>
     Effect.gen(function* () {
       const capabilities = yield* agentAccessCapabilities(threadId);
-      const credential = yield* issueMcpCredential({ threadId, providerInstanceId, capabilities });
+      const credential = yield* issueMcpCredential({
+        threadId,
+        providerInstanceId,
+        capabilities,
+        capabilityCeiling: capabilities,
+      });
       if (credential) {
         const deviceEnvironment = capabilities.has("device")
           ? yield* agentDeviceEnvironment
@@ -1262,6 +1406,12 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
       "provider.thread_id": input.binding.threadId,
     });
     return yield* Effect.gen(function* () {
+      yield* requireWorkerRuntimeMode(
+        input.binding.threadId,
+        input.binding.runtimeMode ?? "full-access",
+        input.operation,
+        bindingInstanceId,
+      );
       const adapter = yield* registry.getByInstance(bindingInstanceId);
       const hasResumeCursor =
         input.binding.resumeCursor !== null && input.binding.resumeCursor !== undefined;
@@ -1307,6 +1457,24 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
           runtimeMode: input.binding.runtimeMode ?? "full-access",
         })
         .pipe(Effect.onError(() => clearMcpSession(input.binding.threadId)));
+      yield* requireWorkerRuntimeMode(
+        input.binding.threadId,
+        resumed.runtimeMode,
+        input.operation,
+        bindingInstanceId,
+      ).pipe(
+        Effect.onError(() =>
+          clearMcpSession(input.binding.threadId).pipe(
+            Effect.andThen(adapter.stopSession(input.binding.threadId)),
+            Effect.catchCause((cause) =>
+              Effect.logWarning("Rejected worker session cleanup failed", {
+                threadId: input.binding.threadId,
+                cause: Cause.pretty(cause),
+              }),
+            ),
+          ),
+        ),
+      );
       if (resumed.provider !== adapter.provider) {
         yield* clearMcpSession(input.binding.threadId);
         return yield* toValidationError(
@@ -1432,6 +1600,12 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
         "ProviderService.startSession",
         parsed,
       );
+      yield* requireWorkerRuntimeMode(
+        threadId,
+        parsed.runtimeMode,
+        "ProviderService.startSession",
+        resolvedInstanceId,
+      );
       let metricProvider = parsed.provider ?? String(resolvedInstanceId);
       yield* Effect.annotateCurrentSpan({
         "provider.operation": "start-session",
@@ -1536,6 +1710,24 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
           })
           .pipe(Effect.onError(() => clearMcpSession(threadId)));
 
+        yield* requireWorkerRuntimeMode(
+          threadId,
+          session.runtimeMode,
+          "ProviderService.startSession",
+          resolvedInstanceId,
+        ).pipe(
+          Effect.onError(() =>
+            clearMcpSession(threadId).pipe(
+              Effect.andThen(adapter.stopSession(threadId)),
+              Effect.catchCause((cause) =>
+                Effect.logWarning("Rejected worker session cleanup failed", {
+                  threadId,
+                  cause: Cause.pretty(cause),
+                }),
+              ),
+            ),
+          ),
+        );
         if (session.provider !== adapter.provider) {
           yield* clearMcpSession(threadId);
           return yield* toValidationError(
@@ -1746,6 +1938,25 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
       // an already-spawned agent process, so we keep the existing token valid
       // rather than issuing a new one: sessions that go a long time between
       // browser tool calls used to lose the toolkit outright.
+      yield* requireWorkerRuntimeMode(
+        input.threadId,
+        routed.runtimeMode,
+        "ProviderService.sendTurn",
+        routed.instanceId,
+      );
+      const capabilities = yield* agentAccessCapabilities(input.threadId);
+      yield* McpSessionRegistry.restrictActiveMcpThreadCapabilities(input.threadId, capabilities);
+      const mcpConfig = McpProviderSession.readMcpProviderSession(input.threadId);
+      if (mcpConfig) {
+        McpProviderSession.setMcpProviderSession({
+          ...mcpConfig,
+          capabilities: new Set(
+            [...mcpConfig.capabilities].filter((capability) =>
+              capabilities.has(capability as McpInvocationContext.McpCapability),
+            ),
+          ),
+        });
+      }
       yield* McpSessionRegistry.touchActiveMcpThread(input.threadId);
       const analyticsModelSelection =
         input.modelSelection?.instanceId === routed.instanceId ? input.modelSelection : undefined;
@@ -1768,6 +1979,12 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
               model: input.modelSelection?.model,
               runtimeMode: routed.runtimeMode,
             });
+            yield* requireWorkerRuntimeMode(
+              input.threadId,
+              routed.runtimeMode,
+              "ProviderService.sendTurn",
+              routed.instanceId,
+            );
             const turn = yield* routed.adapter.sendTurn(input).pipe(
               Effect.tapError((error) =>
                 analytics.record("provider.turn.rejected", {
@@ -2081,6 +2298,7 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
         schema: ProviderStopSessionInput,
         payload: rawInput,
       });
+      yield* clearMcpSession(input.threadId);
       let metricProvider = "unknown";
       return yield* Effect.gen(function* () {
         const routed = yield* resolveRoutableSession({

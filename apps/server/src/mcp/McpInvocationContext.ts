@@ -2,13 +2,87 @@ import {
   type EnvironmentId,
   McpCapabilityUnavailableError,
   PreviewAutomationUnavailableError,
+  type WorkerMcpCapability,
+  type OrchestrationThreadShell,
   type ProviderInstanceId,
   type ThreadId,
 } from "@t3tools/contracts";
+import { resolveProjectSettings } from "@t3tools/shared/projectSettings";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
+import * as Option from "effect/Option";
 
-export type McpCapability = "preview" | "device" | "pull-requests";
+import * as ProjectionSnapshotQuery from "../orchestration/Services/ProjectionSnapshotQuery.ts";
+import * as ServerSettings from "../serverSettings.ts";
+
+export type McpCapability = WorkerMcpCapability;
+
+/** Capture optional orchestration once, then re-read settings and ceilings on every use. */
+export const makeThreadMcpCapabilities = Effect.gen(function* () {
+  const snapshots = yield* Effect.serviceOption(ProjectionSnapshotQuery.ProjectionSnapshotQuery);
+  const settingsService = yield* Effect.serviceOption(ServerSettings.ServerSettingsService);
+  return Effect.fn("McpInvocationContext.threadCapabilities")(
+    function* (threadId: ThreadId) {
+      if (Option.isNone(settingsService)) {
+        return Option.isNone(snapshots) ? undefined : new Set<McpCapability>();
+      }
+      const settings = yield* settingsService.value.getSettings;
+      const ancestors: Array<OrchestrationThreadShell> = [];
+      if (Option.isSome(snapshots)) {
+        let currentId = threadId;
+        const visited = new Set<ThreadId>();
+        while (true) {
+          if (visited.has(currentId) || ancestors.length > 2) return new Set<McpCapability>();
+          visited.add(currentId);
+          const current = yield* snapshots.value.getThreadShellById(currentId);
+          if (Option.isNone(current)) {
+            if (ancestors.length > 0) return new Set<McpCapability>();
+            break;
+          }
+          const thread = current.value;
+          if (thread.worker?.stopRequestedAt != null) return new Set<McpCapability>();
+          if (ancestors[0] && thread.projectId !== ancestors[0].projectId) {
+            return new Set<McpCapability>();
+          }
+          ancestors.push(thread);
+          if (!thread.worker) break;
+          currentId = thread.worker.ownerThreadId;
+        }
+        const root = ancestors.at(-1);
+        if (ancestors.some((thread) => thread.worker && thread.worker.rootThreadId !== root?.id)) {
+          return new Set<McpCapability>();
+        }
+      }
+      const overridden = Object.values(settings.projectSettingsOverrides);
+      const access = ancestors[0]
+        ? resolveProjectSettings(settings, ancestors[0].projectId).settings
+        : {
+            enableAgentBrowserAccess:
+              settings.enableAgentBrowserAccess &&
+              !overridden.some((entry) => entry.enableAgentBrowserAccess !== undefined),
+            enableAgentDeviceAccess:
+              settings.enableAgentDeviceAccess &&
+              !overridden.some((entry) => entry.enableAgentDeviceAccess !== undefined),
+          };
+      let capabilities = new Set<McpCapability>(["pull-requests"]);
+      if (ancestors.length > 0) capabilities.add("workers");
+      if (access.enableAgentBrowserAccess) capabilities.add("preview");
+      if (access.enableAgentDeviceAccess) capabilities.add("device");
+      for (const ancestor of ancestors) {
+        const worker = ancestor.worker;
+        if (worker) {
+          capabilities = new Set(
+            [...capabilities].filter((capability) =>
+              worker.mcpCapabilityCeiling.includes(capability),
+            ),
+          );
+        }
+      }
+      return capabilities;
+    },
+    Effect.catch(() => Effect.succeed(new Set<McpCapability>())),
+  );
+});
 
 export interface McpInvocationScope {
   readonly environmentId: EnvironmentId;

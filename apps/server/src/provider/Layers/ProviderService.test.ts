@@ -11,11 +11,14 @@ import type {
   ProviderTurnStartResult,
   ProviderUploadFeedbackInput,
   ProviderUploadFeedbackResult,
+  RuntimeMode,
+  ThreadWorkerMetadata,
 } from "@t3tools/contracts";
 import {
   ASSISTANT_CITATION_MAX_TEXT_LENGTH,
   AssistantCitation,
   ApprovalRequestId,
+  CommandId,
   EnvironmentId,
   EventId,
   MessageId,
@@ -58,12 +61,18 @@ import {
   ProviderUnsupportedError,
   ProviderValidationError,
   ProviderWorkspaceMissingError,
+  type ProviderServiceError,
   type ProviderAdapterError,
 } from "../Errors.ts";
 import type { ProviderAdapterShape } from "../Services/ProviderAdapter.ts";
 import * as ProviderAdapterRegistry from "../Services/ProviderAdapterRegistry.ts";
 import * as ProviderService from "../Services/ProviderService.ts";
 import * as ProviderSessionDirectory from "../Services/ProviderSessionDirectory.ts";
+import * as McpSessionRegistry from "../../mcp/McpSessionRegistry.ts";
+import * as McpProviderSession from "../../mcp/McpProviderSession.ts";
+import * as ServerEnvironment from "../../environment/ServerEnvironment.ts";
+import { HttpServer } from "effect/unstable/http";
+import * as NetAddress from "effect/unstable/net/NetAddress";
 import { makeProviderServiceLive } from "./ProviderService.ts";
 import * as ProviderEventLoggers from "./ProviderEventLoggers.ts";
 import { ProviderSessionDirectoryLive } from "./ProviderSessionDirectory.ts";
@@ -5067,13 +5076,25 @@ describe("agent browser access", () => {
     access: boolean | { readonly browser: boolean; readonly device: boolean },
     threadId: ThreadId,
     projectOverride?: boolean | { readonly browser?: boolean; readonly device?: boolean },
-    options?: { readonly withoutOrchestration?: boolean },
+    options?: {
+      deleted?: boolean;
+      readonly realCredentials?: boolean;
+      readonly withoutOrchestration?: boolean;
+      readonly adapter?: ReturnType<typeof makeFakeCodexAdapter>;
+      readonly worker?: ThreadWorkerMetadata;
+      readonly runtimeMode?: RuntimeMode;
+      ownerRuntimeMode?: RuntimeMode;
+      readonly launchArgs?: string;
+      readonly afterStart?: (
+        provider: ProviderService.ProviderService["Service"],
+      ) => Effect.Effect<void, ProviderServiceError>;
+    },
   ) =>
     Effect.gen(function* () {
       const enableAgentBrowserAccess = typeof access === "boolean" ? access : access.browser;
       const enableAgentDeviceAccess = typeof access === "boolean" ? access : access.device;
       const issued: Array<{ threadId: ThreadId; capabilities: ReadonlyArray<string> }> = [];
-      const codex = makeFakeCodexAdapter();
+      const codex = options?.adapter ?? makeFakeCodexAdapter();
       const providerAdapterLayer = Layer.succeed(
         ProviderAdapterRegistry.ProviderAdapterRegistry,
         makeAdapterRegistryMock({ [CODEX_DRIVER]: codex.adapter }),
@@ -5085,6 +5106,11 @@ describe("agent browser access", () => {
         Layer.provide(runtimeRepositoryLayer),
       );
       const projectionLayer = Layer.succeed(ProjectionSnapshotQuery.ProjectionSnapshotQuery, {
+        getWorkerSpawnMetadata: (id) =>
+          Effect.succeed(Option.fromNullishOr(id === threadId ? options?.worker : undefined)),
+        getWorkerAdmissionStates: () => Effect.die("unused"),
+        getWorkerState: () => Effect.die("unused"),
+        listWorkerStates: () => Effect.die("unused"),
         getTurnStartMessage: () => Effect.die("unused"),
         getImportedAgentSessionSources: () => Effect.die("unused"),
         getUserInputActivity: () => Effect.die("unused"),
@@ -5107,14 +5133,24 @@ describe("agent browser access", () => {
         getThreadRuntimeContext: () => Effect.die("unused"),
         getThreadShellById: (requestedThreadId) =>
           Effect.gen(function* () {
-            assert.equal(requestedThreadId, threadId);
+            if (requestedThreadId === threadId && options?.deleted) return Option.none();
+            assert.isTrue(
+              requestedThreadId === threadId ||
+                requestedThreadId === options?.worker?.ownerThreadId,
+            );
             return Option.some(
               yield* decodeBrowserAccessThreadShell({
-                id: threadId,
+                id: requestedThreadId,
                 projectId,
                 title: "Browser access test",
                 modelSelection: createModelSelection(codexInstanceId, "gpt-5.4"),
-                runtimeMode: "full-access",
+                runtimeMode:
+                  requestedThreadId === threadId
+                    ? (options?.runtimeMode ?? "full-access")
+                    : (options?.ownerRuntimeMode ?? "full-access"),
+                ...(requestedThreadId === threadId && options?.worker
+                  ? { worker: options.worker }
+                  : {}),
                 branch: null,
                 worktreePath: null,
                 latestTurn: null,
@@ -5134,19 +5170,31 @@ describe("agent browser access", () => {
       });
       const providerLayer = makeProviderServiceLive({
         issueMcpCredential: (request) =>
-          Effect.sync(() => {
-            issued.push({
-              threadId: request.threadId,
-              capabilities: [...request.capabilities].toSorted(),
-            });
-            return undefined;
-          }),
+          options?.realCredentials
+            ? McpSessionRegistry.issueActiveMcpCredential(request)
+            : Effect.sync(() => {
+                issued.push({
+                  threadId: request.threadId,
+                  capabilities: [...request.capabilities].toSorted(),
+                });
+                return undefined;
+              }),
       }).pipe(
         Layer.provide(providerAdapterLayer),
         Layer.provide(directoryLayer),
         Layer.provide(options?.withoutOrchestration ? Layer.empty : projectionLayer),
         Layer.provide(
           ServerSettings.ServerSettingsService.layerTest({
+            ...(options?.launchArgs !== undefined
+              ? {
+                  providerInstances: {
+                    [codexInstanceId]: {
+                      driver: CODEX_DRIVER,
+                      config: { launchArgs: options.launchArgs },
+                    },
+                  },
+                }
+              : {}),
             enableAgentBrowserAccess,
             enableAgentDeviceAccess,
             projectSettingsOverrides:
@@ -5178,16 +5226,84 @@ describe("agent browser access", () => {
 
       yield* Effect.gen(function* () {
         const provider = yield* ProviderService.ProviderService;
-        return yield* provider.startSession(threadId, {
+        yield* provider.startSession(threadId, {
           provider: CODEX_DRIVER,
           providerInstanceId: codexInstanceId,
           threadId,
-          runtimeMode: "full-access",
+          runtimeMode: options?.runtimeMode ?? "full-access",
         });
+        if (options?.afterStart) yield* options.afterStart(provider);
       }).pipe(Effect.provide(providerLayer));
 
       return issued;
     });
+
+  const credentialRegistryLayer = McpSessionRegistry.layer.pipe(
+    Layer.provide(
+      Layer.succeed(
+        HttpServer.HttpServer,
+        HttpServer.HttpServer.of({
+          address: NetAddress.inetAddressFromIpStringUnsafe("127.0.0.1", 43123),
+          serve: (() => Effect.void) as HttpServer.HttpServer["Service"]["serve"],
+        }),
+      ),
+    ),
+    Layer.provide(
+      Layer.succeed(ServerEnvironment.ServerEnvironment, {
+        getEnvironmentId: Effect.succeed(EnvironmentId.make("stop-test")),
+        getDescriptor: Effect.die("unused"),
+      }),
+    ),
+    Layer.provide(NodeServices.layer),
+  );
+
+  for (const failStop of [false, true]) {
+    it.effect(`revokes MCP before native stop completes (failure=${failStop})`, () =>
+      Effect.gen(function* () {
+        const registry = yield* McpSessionRegistry.McpSessionRegistry;
+        const entered = yield* Deferred.make<void>();
+        const release = yield* Deferred.make<void>();
+        const adapter = makeFakeCodexAdapter();
+        adapter.stopSession.mockImplementation(() =>
+          Deferred.succeed(entered, undefined).pipe(
+            Effect.andThen(Deferred.await(release)),
+            Effect.andThen(
+              failStop
+                ? Effect.fail(
+                    new ProviderAdapterRequestError({
+                      provider: String(CODEX_DRIVER),
+                      method: "stopSession",
+                      detail: "native stop failed",
+                    }),
+                  )
+                : Effect.void,
+            ),
+          ),
+        );
+        const threadId = asThreadId(`thread-stop-credential-${failStop}`);
+        yield* startSessionWith(false, threadId, undefined, {
+          adapter,
+          realCredentials: true,
+          afterStart: (provider) =>
+            Effect.gen(function* () {
+              const config = McpProviderSession.readMcpProviderSession(threadId)!;
+              const token = config.authorizationHeader.slice(7);
+              assert.isDefined(yield* registry.resolve(token));
+              const stopping = yield* provider
+                .stopSession({ threadId })
+                .pipe(Effect.exit, Effect.forkChild);
+              yield* Deferred.await(entered);
+              assert.isUndefined(yield* registry.resolve(token));
+              assert.isUndefined(McpProviderSession.readMcpProviderSession(threadId));
+              yield* Deferred.succeed(release, undefined);
+              const result = yield* Fiber.join(stopping);
+              assert.equal(Exit.isFailure(result), failStop);
+              assert.isUndefined(yield* registry.resolve(token));
+            }),
+        });
+      }).pipe(Effect.provide(credentialRegistryLayer), Effect.provide(NodeServices.layer)),
+    );
+  }
 
   // The capability on the credential is the observable that matters: a session
   // always gets a credential (the pull request toolkit is never withheld), and
@@ -5198,7 +5314,7 @@ describe("agent browser access", () => {
 
       const issued = yield* startSessionWith(false, threadId);
 
-      assert.deepEqual(issued, [{ threadId, capabilities: ["pull-requests"] }]);
+      assert.deepEqual(issued, [{ threadId, capabilities: ["pull-requests", "workers"] }]);
     }).pipe(Effect.provide(NodeServices.layer)),
   );
 
@@ -5209,7 +5325,7 @@ describe("agent browser access", () => {
       const issued = yield* startSessionWith(true, threadId);
 
       assert.deepEqual(issued, [
-        { threadId, capabilities: ["device", "preview", "pull-requests"] },
+        { threadId, capabilities: ["device", "preview", "pull-requests", "workers"] },
       ]);
     }).pipe(Effect.provide(NodeServices.layer)),
   );
@@ -5220,7 +5336,9 @@ describe("agent browser access", () => {
 
       const issued = yield* startSessionWith({ browser: false, device: true }, threadId);
 
-      assert.deepEqual(issued, [{ threadId, capabilities: ["device", "pull-requests"] }]);
+      assert.deepEqual(issued, [
+        { threadId, capabilities: ["device", "pull-requests", "workers"] },
+      ]);
     }).pipe(Effect.provide(NodeServices.layer)),
   );
 
@@ -5228,7 +5346,7 @@ describe("agent browser access", () => {
     Effect.gen(function* () {
       const threadId = asThreadId("thread-project-browser-off");
       const issued = yield* startSessionWith({ browser: true, device: false }, threadId, false);
-      assert.deepEqual(issued, [{ threadId, capabilities: ["pull-requests"] }]);
+      assert.deepEqual(issued, [{ threadId, capabilities: ["pull-requests", "workers"] }]);
     }).pipe(Effect.provide(NodeServices.layer)),
   );
 
@@ -5236,7 +5354,9 @@ describe("agent browser access", () => {
     Effect.gen(function* () {
       const threadId = asThreadId("thread-project-browser-off-device-on");
       const issued = yield* startSessionWith(true, threadId, false);
-      assert.deepEqual(issued, [{ threadId, capabilities: ["device", "pull-requests"] }]);
+      assert.deepEqual(issued, [
+        { threadId, capabilities: ["device", "pull-requests", "workers"] },
+      ]);
     }).pipe(Effect.provide(NodeServices.layer)),
   );
 
@@ -5244,7 +5364,9 @@ describe("agent browser access", () => {
     Effect.gen(function* () {
       const threadId = asThreadId("thread-project-browser-on");
       const issued = yield* startSessionWith({ browser: false, device: false }, threadId, true);
-      assert.deepEqual(issued, [{ threadId, capabilities: ["preview", "pull-requests"] }]);
+      assert.deepEqual(issued, [
+        { threadId, capabilities: ["preview", "pull-requests", "workers"] },
+      ]);
     }).pipe(Effect.provide(NodeServices.layer)),
   );
 
@@ -5254,7 +5376,228 @@ describe("agent browser access", () => {
       const issued = yield* startSessionWith({ browser: false, device: false }, threadId, {
         device: true,
       });
-      assert.deepEqual(issued, [{ threadId, capabilities: ["device", "pull-requests"] }]);
+      assert.deepEqual(issued, [
+        { threadId, capabilities: ["device", "pull-requests", "workers"] },
+      ]);
+    }).pipe(Effect.provide(NodeServices.layer)),
+  );
+
+  const workerMetadata = (ceiling: RuntimeMode = "approval-required"): ThreadWorkerMetadata => ({
+    ownerThreadId: ThreadId.make("worker-owner"),
+    rootThreadId: ThreadId.make("worker-owner"),
+    depth: 1,
+    spawnCommandId: CommandId.make("spawn-worker-safety"),
+    spawnFingerprint: "worker-safety",
+    label: "worker safety",
+    runtimeModeCeiling: ceiling,
+    mcpCapabilityCeiling: ["pull-requests"],
+    stopRequestedAt: null,
+    lastStopSequence: null,
+  });
+
+  it.effect("rejected worker startup revokes MCP before blocked native cleanup", () =>
+    Effect.gen(function* () {
+      const registry = yield* McpSessionRegistry.McpSessionRegistry;
+      const enteredStart = yield* Deferred.make<void>();
+      const releaseStart = yield* Deferred.make<void>();
+      const enteredStop = yield* Deferred.make<void>();
+      const releaseStop = yield* Deferred.make<void>();
+      const adapter = makeFakeCodexAdapter();
+      const start = adapter.startSession.getMockImplementation()!;
+      adapter.startSession.mockImplementation((input) =>
+        start(input).pipe(
+          Effect.tap(() => Deferred.succeed(enteredStart, undefined)),
+          Effect.tap(() => Deferred.await(releaseStart)),
+        ),
+      );
+      adapter.stopSession.mockImplementation(() =>
+        Deferred.succeed(enteredStop, undefined).pipe(
+          Effect.andThen(Deferred.await(releaseStop)),
+          Effect.andThen(
+            Effect.fail(
+              new ProviderAdapterRequestError({
+                provider: String(CODEX_DRIVER),
+                method: "stopSession",
+                detail: "cleanup stop failed",
+              }),
+            ),
+          ),
+        ),
+      );
+      const threadId = ThreadId.make("worker-rejected-start-credential");
+      const options = {
+        adapter,
+        realCredentials: true,
+        worker: workerMetadata("full-access"),
+        ownerRuntimeMode: "full-access" as RuntimeMode,
+      };
+      const starting = yield* startSessionWith(false, threadId, undefined, options).pipe(
+        Effect.exit,
+        Effect.forkChild,
+      );
+      yield* Deferred.await(enteredStart);
+      const token =
+        McpProviderSession.readMcpProviderSession(threadId)!.authorizationHeader.slice(7);
+      assert.isDefined(yield* registry.resolve(token));
+      options.ownerRuntimeMode = "approval-required";
+      yield* Deferred.succeed(releaseStart, undefined);
+      yield* Deferred.await(enteredStop);
+      assert.isUndefined(yield* registry.resolve(token));
+      assert.isUndefined(McpProviderSession.readMcpProviderSession(threadId));
+      yield* Deferred.succeed(releaseStop, undefined);
+      assert.isTrue(Exit.isFailure(yield* Fiber.join(starting)));
+      assert.isUndefined(yield* registry.resolve(token));
+    }).pipe(Effect.provide(credentialRegistryLayer), Effect.provide(NodeServices.layer)),
+  );
+
+  it.effect("never grants workers or preview beyond an immutable worker capability ceiling", () =>
+    Effect.gen(function* () {
+      const threadId = ThreadId.make("worker-limited-capabilities");
+      const issued = yield* startSessionWith(true, threadId, undefined, {
+        worker: workerMetadata("full-access"),
+      });
+      assert.deepEqual(issued, [{ threadId, capabilities: ["pull-requests"] }]);
+    }).pipe(Effect.provide(NodeServices.layer)),
+  );
+
+  it.effect("rejects worker runtime escalation before calling the native adapter", () =>
+    Effect.gen(function* () {
+      const adapter = makeFakeCodexAdapter();
+      const error = yield* startSessionWith(true, ThreadId.make("worker-escalation"), undefined, {
+        adapter,
+        worker: workerMetadata(),
+        runtimeMode: "full-access",
+      }).pipe(Effect.flip);
+      assert.instanceOf(error, ProviderValidationError);
+      assert.include(error.message, "inherited ceiling");
+      assert.equal(adapter.startSession.mock.calls.length, 0);
+    }).pipe(Effect.provide(NodeServices.layer)),
+  );
+
+  it.effect("rejects native turns after the owner reduces its live runtime permissions", () =>
+    Effect.gen(function* () {
+      const adapter = makeFakeCodexAdapter();
+      const options = {
+        adapter,
+        worker: workerMetadata("full-access"),
+        ownerRuntimeMode: "full-access" as RuntimeMode,
+        afterStart: (provider: ProviderService.ProviderService["Service"]) =>
+          Effect.gen(function* () {
+            options.ownerRuntimeMode = "approval-required";
+            const error = yield* provider
+              .sendTurn({ threadId: ThreadId.make("worker-owner-restricted"), input: "continue" })
+              .pipe(Effect.flip, Effect.orDie);
+            assert.instanceOf(error, ProviderValidationError);
+            assert.include(error.message, "owner's permissions");
+          }),
+      };
+      yield* startSessionWith(true, ThreadId.make("worker-owner-restricted"), undefined, options);
+      assert.equal(adapter.sendTurn.mock.calls.length, 0);
+    }).pipe(Effect.provide(NodeServices.layer)),
+  );
+
+  it.effect("deleted durable worker cannot recover as a provider-only session", () =>
+    Effect.gen(function* () {
+      const adapter = makeFakeCodexAdapter();
+      const threadId = ThreadId.make("worker-deleted-recovery");
+      const options = {
+        adapter,
+        deleted: false,
+        worker: workerMetadata("full-access"),
+        afterStart: (provider: ProviderService.ProviderService["Service"]) =>
+          Effect.gen(function* () {
+            options.deleted = true;
+            const error = yield* provider
+              .sendTurn({ threadId, input: "continue" })
+              .pipe(Effect.flip, Effect.orDie);
+            assert.instanceOf(error, ProviderValidationError);
+            assert.include(error.message, "Deleted workers");
+          }),
+      };
+      yield* startSessionWith(true, threadId, undefined, options);
+      assert.equal(adapter.sendTurn.mock.calls.length, 0);
+    }).pipe(Effect.provide(NodeServices.layer)),
+  );
+
+  it.effect("rejects configured permission overrides for restricted workers", () =>
+    Effect.gen(function* () {
+      const adapter = makeFakeCodexAdapter();
+      for (const launchArgs of [
+        "--yolo",
+        '-c sandbox_mode="danger-full-access"',
+        "--permission-mode bypassPermissions",
+      ]) {
+        const error = yield* startSessionWith(
+          true,
+          ThreadId.make("worker-launch-override"),
+          undefined,
+          {
+            adapter,
+            worker: workerMetadata(),
+            runtimeMode: "approval-required",
+            launchArgs,
+          },
+        ).pipe(Effect.flip);
+        assert.instanceOf(error, ProviderValidationError);
+        assert.include(error.message, "launch arguments");
+      }
+      assert.equal(adapter.startSession.mock.calls.length, 0);
+    }).pipe(Effect.provide(NodeServices.layer)),
+  );
+
+  it.effect("stopped worker activation cannot start natively without an explicit follow-up", () =>
+    Effect.gen(function* () {
+      const adapter = makeFakeCodexAdapter();
+      const error = yield* startSessionWith(true, ThreadId.make("worker-stopped"), undefined, {
+        adapter,
+        worker: {
+          ...workerMetadata("full-access"),
+          stopRequestedAt: "2026-10-02T00:00:00.000Z",
+          lastStopSequence: 10,
+        },
+      }).pipe(Effect.flip);
+      assert.instanceOf(error, ProviderValidationError);
+      assert.include(error.message, "explicit follow-up");
+      assert.equal(adapter.startSession.mock.calls.length, 0);
+    }).pipe(Effect.provide(NodeServices.layer)),
+  );
+
+  it.effect("keeps ordinary launch configuration available to supervised workers", () =>
+    Effect.gen(function* () {
+      const adapter = makeFakeCodexAdapter();
+      yield* startSessionWith(true, ThreadId.make("worker-safe-launch-config"), undefined, {
+        adapter,
+        worker: workerMetadata(),
+        runtimeMode: "approval-required",
+        launchArgs:
+          "-c model_reasoning_effort=high --config analytics.enabled=false --sandbox=read-only",
+      });
+      assert.equal(adapter.startSession.mock.calls.length, 1);
+    }).pipe(Effect.provide(NodeServices.layer)),
+  );
+
+  it.effect("recovery cannot resume a persisted worker above its owner's current permissions", () =>
+    Effect.gen(function* () {
+      const adapter = makeFakeCodexAdapter();
+      const threadId = ThreadId.make("worker-recovery-ceiling");
+      const options = {
+        adapter,
+        worker: workerMetadata("full-access"),
+        ownerRuntimeMode: "full-access" as RuntimeMode,
+        afterStart: (provider: ProviderService.ProviderService["Service"]) =>
+          Effect.gen(function* () {
+            yield* provider.stopSession({ threadId });
+            options.ownerRuntimeMode = "approval-required";
+            const error = yield* provider
+              .sendTurn({ threadId, input: "resume" })
+              .pipe(Effect.flip, Effect.orDie);
+            assert.instanceOf(error, ProviderValidationError);
+            assert.include(error.message, "owner's permissions");
+          }),
+      };
+      yield* startSessionWith(true, threadId, undefined, options);
+      assert.equal(adapter.startSession.mock.calls.length, 1);
+      assert.equal(adapter.sendTurn.mock.calls.length, 0);
     }).pipe(Effect.provide(NodeServices.layer)),
   );
 

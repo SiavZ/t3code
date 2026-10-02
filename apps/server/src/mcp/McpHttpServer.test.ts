@@ -14,6 +14,7 @@ import { HttpBody, HttpClient, HttpRouter, HttpServerResponse } from "effect/uns
 
 import { OrchestrationEngineService } from "../orchestration/Services/OrchestrationEngine.ts";
 import { ProjectionSnapshotQuery } from "../orchestration/Services/ProjectionSnapshotQuery.ts";
+import * as OwnedWorkers from "../orchestration/OwnedWorkers.ts";
 import * as ServerConfig from "../config.ts";
 import * as McpHttpServer from "./McpHttpServer.ts";
 import * as McpInvocationContext from "./McpInvocationContext.ts";
@@ -462,6 +463,43 @@ it.effect(
         { type: "text", text: "MCP credential does not grant the pull-requests capability." },
       ]);
     }).pipe(Effect.provide(PullRequestsTestLayer)),
+);
+
+it.effect("exposes six worker tools and denies a preview-only MCP credential", () =>
+  Effect.gen(function* () {
+    const server = yield* McpServer.McpServer;
+    expect(server.tools.map(({ tool }) => tool.name)).toEqual(
+      expect.arrayContaining([
+        "workers_spawn",
+        "workers_list",
+        "workers_get",
+        "workers_send",
+        "workers_stop",
+        "workers_wait",
+      ]),
+    );
+    const denied = yield* server
+      .callTool({ name: "workers_list", arguments: {} })
+      .pipe(
+        Effect.provideService(McpInvocationContext.McpInvocationContext, invocation),
+        Effect.provideService(McpSchema.McpServerClient, client),
+      );
+    expect(denied.isError).toBe(true);
+    expect(denied.content).toEqual([
+      { type: "text", text: "MCP credential does not grant the workers capability." },
+    ]);
+  }).pipe(
+    Effect.provide(
+      McpHttpServer.WorkersToolkitRegistrationLive.pipe(
+        Layer.provideMerge(McpServer.McpServer.layer),
+        Layer.provide(
+          Layer.mock(OwnedWorkers.OwnedWorkers)({
+            list: () => Effect.die("unprovisioned credential reached worker service"),
+          }),
+        ),
+      ),
+    ),
+  ),
 );
 
 it.effect("keeps the snapshot text under the agent's output ceiling", () =>

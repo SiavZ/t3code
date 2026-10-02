@@ -25,6 +25,7 @@ import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Equal from "effect/Equal";
 import * as FileSystem from "effect/FileSystem";
+import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
@@ -83,6 +84,7 @@ type ProviderIntentEvent = Extract<
       | "thread.approval-response-requested"
       | "thread.user-input-response-requested"
       | "thread.session-stop-requested"
+      | "thread.deleted"
       | "thread.settled"
       | "thread.session-set";
   }
@@ -266,6 +268,7 @@ const make = Effect.gen(function* () {
     }
   >();
   const stoppingThreadIds = new Set<ThreadId>();
+  const workerSends = new Map<ThreadId, Map<symbol, Fiber.Fiber<void, never>>>();
 
   const appendProviderFailureActivity = (input: {
     readonly threadId: ThreadId;
@@ -915,6 +918,8 @@ const make = Effect.gen(function* () {
     readonly messageText: string;
     readonly attachments?: ReadonlyArray<ChatAttachment>;
   }) {
+    const thread = yield* resolveThreadShell(input.threadId);
+    if (!thread || thread.worker) return;
     if (!input.branch || !input.worktreePath) {
       return;
     }
@@ -1230,6 +1235,7 @@ const make = Effect.gen(function* () {
     if (!thread) {
       return;
     }
+    if (thread.worker && event.sequence <= (thread.worker.lastStopSequence ?? -1)) return;
     const turnStart = yield* projectionSnapshotQuery.getTurnStartMessage({
       threadId: thread.id,
       messageId: event.payload.messageId,
@@ -1516,15 +1522,46 @@ const make = Effect.gen(function* () {
       return;
     }
 
-    const send = providerService
-      .sendTurn(sendTurnRequest.value)
-      .pipe(Effect.asVoid, Effect.catchCause(recoverTurnStartFailure));
+    const latestThread = yield* resolveThreadShell(event.payload.threadId);
+    if (
+      thread.worker &&
+      (!latestThread || event.sequence <= (latestThread.worker?.lastStopSequence ?? -1))
+    ) {
+      yield* providerService.stopSession({ threadId: thread.id });
+      return;
+    }
+
+    const send = Effect.gen(function* () {
+      const current = yield* resolveThreadShell(event.payload.threadId);
+      if (thread.worker && (!current || event.sequence <= (current.worker?.lastStopSequence ?? -1)))
+        return;
+      yield* providerService.sendTurn(sendTurnRequest.value);
+    }).pipe(Effect.asVoid, Effect.catchCause(recoverTurnStartFailure));
     // The forked send settles `sent` from here on, so drop the entry the post-processing hook uses.
     if (resumed && event.commandId !== null) resumedTurnStarts.delete(event.commandId);
-    yield* send.pipe(
-      Effect.ensuring(resumed ? Deferred.succeed(resumed.sent, undefined) : Effect.void),
-      Effect.forkScoped,
-    );
+    const finish = resumed ? Deferred.succeed(resumed.sent, undefined) : Effect.void;
+    if (thread.worker) {
+      const gate = yield* Deferred.make<void>();
+      const id = Symbol();
+      const sends = workerSends.get(thread.id) ?? new Map<symbol, Fiber.Fiber<void, never>>();
+      workerSends.set(thread.id, sends);
+      const fiber = yield* Deferred.await(gate).pipe(
+        Effect.andThen(send),
+        Effect.ensuring(finish),
+        Effect.ensuring(
+          Effect.sync(() => {
+            sends.delete(id);
+            if (sends.size === 0 && workerSends.get(thread.id) === sends)
+              workerSends.delete(thread.id);
+          }),
+        ),
+        Effect.forkScoped,
+      );
+      sends.set(id, fiber);
+      yield* Deferred.succeed(gate, undefined);
+      return;
+    }
+    yield* send.pipe(Effect.ensuring(finish), Effect.forkScoped);
   });
 
   const processTurnInterruptRequested = Effect.fn("processTurnInterruptRequested")(function* (
@@ -1728,6 +1765,8 @@ const make = Effect.gen(function* () {
     const now = event.payload.createdAt;
     const wasCompacting = compactingThreadIds.has(thread.id);
     stoppingThreadIds.add(thread.id);
+    const sends = workerSends.get(thread.id);
+    if (sends) yield* Effect.forEach([...sends.values()], Fiber.interrupt, { discard: true });
     const clearStopping = Effect.sync(() => void stoppingThreadIds.delete(thread.id));
     yield* cancelTurnsAfterCompaction(
       thread.id,
@@ -1797,6 +1836,16 @@ const make = Effect.gen(function* () {
       eventType: event.type,
     });
     switch (event.type) {
+      case "thread.deleted": {
+        const sends = workerSends.get(event.payload.threadId);
+        const metadata = yield* projectionSnapshotQuery.getWorkerSpawnMetadata(
+          event.payload.threadId,
+        );
+        if (!sends && Option.isNone(metadata)) return;
+        if (sends) yield* Effect.forEach([...sends.values()], Fiber.interrupt, { discard: true });
+        yield* providerService.stopSession({ threadId: event.payload.threadId });
+        return;
+      }
       case "thread.meta-updated":
         if (event.payload.regenerateTitle) yield* threadTitleRegenerationWorker.enqueue(event);
         else if (event.payload.titleState?.needsRefinement)
@@ -1912,6 +1961,7 @@ const make = Effect.gen(function* () {
         event.type === "thread.approval-response-requested" ||
         event.type === "thread.user-input-response-requested" ||
         event.type === "thread.session-stop-requested" ||
+        event.type === "thread.deleted" ||
         event.type === "thread.settled"
       ) {
         return yield* worker.enqueue(event);

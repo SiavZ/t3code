@@ -6,6 +6,13 @@ import {
   ThreadLinkedPullRequest,
   UserInputRequestedPayload,
   isImportedAgentSessionMessageId,
+  isWorkerRuntimeModeAllowed,
+  WORKER_MAX_DEPTH,
+  WORKER_MAX_LIVE_PER_ROOT,
+  WORKER_MAX_LIVE_PER_ENVIRONMENT,
+  WorkerOperationError,
+  type RuntimeMode,
+  type ThreadId,
   type OrchestrationCommand,
   type OrchestrationEvent,
   type OrchestrationReadModel,
@@ -46,6 +53,7 @@ import {
 } from "./commandInvariants.ts";
 import { projectEvent } from "./projector.ts";
 import { threadHasQueuedTurnStart } from "./ThreadSettlementPolicy.ts";
+import type { WorkerThreadState } from "./Services/ProjectionSnapshotQuery.ts";
 
 const monogramSegmenter = new Intl.Segmenter(undefined, { granularity: "grapheme" });
 
@@ -174,12 +182,110 @@ type DecideOrchestrationCommandResult =
   | PlannedOrchestrationEvent
   | ReadonlyArray<PlannedOrchestrationEvent>;
 
+function workerIsLive({ thread, pendingMessageId }: WorkerThreadState): boolean {
+  return (
+    pendingMessageId !== null ||
+    thread.session?.status === "starting" ||
+    (thread.session?.status === "running" && thread.session.activeTurnId !== null) ||
+    thread.latestTurn?.state === "running" ||
+    thread.hasPendingApprovals ||
+    thread.hasPendingUserInput ||
+    thread.backgroundLiveness != null ||
+    (thread.worker?.stopRequestedAt != null &&
+      thread.session != null &&
+      thread.session.status !== "stopped" &&
+      thread.session.status !== "error")
+  );
+}
+
+const requireWorkerChain = Effect.fnUntraced(function* (
+  readModel: OrchestrationReadModel,
+  thread: OrchestrationThread,
+  operation: "spawn" | "send" | "stop",
+  requestedMode: RuntimeMode = thread.runtimeMode,
+) {
+  let cursor = thread;
+  for (let depth = 0; cursor.worker != null; depth += 1) {
+    const metadata = cursor.worker;
+    const owner = readModel.threads.find(
+      (entry) => entry.id === metadata.ownerThreadId && entry.deletedAt === null,
+    );
+    if (
+      depth >= WORKER_MAX_DEPTH ||
+      !owner ||
+      owner.projectId !== thread.projectId ||
+      metadata.rootThreadId !== (owner.worker?.rootThreadId ?? owner.id) ||
+      metadata.depth !== (owner.worker?.depth ?? 0) + 1 ||
+      (operation !== "stop" &&
+        (!isWorkerRuntimeModeAllowed(requestedMode, metadata.runtimeModeCeiling) ||
+          !isWorkerRuntimeModeAllowed(requestedMode, owner.runtimeMode)))
+    ) {
+      return yield* new WorkerOperationError({
+        operation,
+        code: "forbidden",
+        detail: "Worker ownership or inherited permission ceiling is no longer valid.",
+      });
+    }
+    cursor = owner;
+  }
+});
+
+const requireOwnedWorker = Effect.fnUntraced(function* (
+  readModel: OrchestrationReadModel,
+  callerThreadId: ThreadId,
+  thread: OrchestrationThread,
+  operation: "send" | "stop",
+) {
+  yield* requireWorkerChain(readModel, thread, operation);
+  let cursor = thread;
+  for (let depth = 0; depth < WORKER_MAX_DEPTH && cursor.worker != null; depth += 1) {
+    if (cursor.worker.ownerThreadId === callerThreadId) return;
+    const owner = readModel.threads.find((entry) => entry.id === cursor.worker?.ownerThreadId);
+    if (!owner) break;
+    cursor = owner;
+  }
+  return yield* new WorkerOperationError({
+    operation,
+    code: "forbidden",
+    detail: "The caller does not own this worker.",
+  });
+});
+
+const requireWorkerAdmission = Effect.fnUntraced(function* (
+  rootThreadId: ThreadId,
+  workerStates: ReadonlyArray<WorkerThreadState>,
+  operation: "spawn" | "send",
+  targetThreadId?: ThreadId,
+) {
+  const live = workerStates.filter(workerIsLive);
+  if (targetThreadId !== undefined && live.some(({ thread }) => thread.id === targetThreadId)) {
+    return yield* new WorkerOperationError({
+      operation,
+      code: "busy",
+      detail: "The worker still has active or waiting work.",
+    });
+  }
+  if (
+    live.length >= WORKER_MAX_LIVE_PER_ENVIRONMENT ||
+    live.filter(({ thread }) => thread.worker?.rootThreadId === rootThreadId).length >=
+      WORKER_MAX_LIVE_PER_ROOT
+  ) {
+    return yield* new WorkerOperationError({
+      operation,
+      code: "limit",
+      detail: "The owned-worker concurrency limit has been reached.",
+    });
+  }
+});
+
 const decideCommandSequence = Effect.fn("decideCommandSequence")(function* ({
   commands,
   readModel,
+  workerStates,
 }: {
   readonly commands: ReadonlyArray<OrchestrationCommand>;
   readonly readModel: OrchestrationReadModel;
+  readonly workerStates?: ReadonlyArray<WorkerThreadState>;
 }): Effect.fn.Return<
   ReadonlyArray<PlannedOrchestrationEvent>,
   OrchestrationCommandRejection | PlatformError.PlatformError,
@@ -193,6 +299,7 @@ const decideCommandSequence = Effect.fn("decideCommandSequence")(function* ({
     const decided = yield* decideOrchestrationCommand({
       command: nextCommand,
       readModel: nextReadModel,
+      ...(workerStates !== undefined ? { workerStates } : {}),
     });
     const nextEvents = Array.isArray(decided) ? decided : [decided];
     for (const nextEvent of nextEvents) {
@@ -212,16 +319,150 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
   command,
   readModel,
   userInputActivity,
+  workerStates,
 }: {
   readonly command: OrchestrationCommand;
   readonly readModel: OrchestrationReadModel;
   readonly userInputActivity?: OrchestrationThreadActivity;
+  readonly workerStates?: ReadonlyArray<WorkerThreadState>;
 }): Effect.fn.Return<
   DecideOrchestrationCommandResult,
   OrchestrationCommandRejection | PlatformError.PlatformError,
   Crypto.Crypto
 > {
   switch (command.type) {
+    case "thread.worker.spawn": {
+      const caller = yield* requireThread({ readModel, command, threadId: command.callerThreadId });
+      if (caller.worker?.stopRequestedAt != null) {
+        return yield* new WorkerOperationError({
+          operation: "spawn",
+          code: "forbidden",
+          detail: "A stopped worker cannot initiate new work until its owner resumes it.",
+        });
+      }
+      yield* requireWorkerChain(readModel, caller, "spawn");
+      const depth = (caller.worker?.depth ?? 0) + 1;
+      if (depth > WORKER_MAX_DEPTH) {
+        return yield* new WorkerOperationError({
+          operation: "spawn",
+          code: "limit",
+          detail: "The owned-worker nesting limit has been reached.",
+        });
+      }
+      const rootThreadId = caller.worker?.rootThreadId ?? caller.id;
+      yield* requireWorkerAdmission(rootThreadId, workerStates ?? [], "spawn");
+      if (
+        caller.worker &&
+        command.mcpCapabilityCeiling.some(
+          (capability) => !caller.worker?.mcpCapabilityCeiling.includes(capability),
+        )
+      ) {
+        return yield* new WorkerOperationError({
+          operation: "spawn",
+          code: "forbidden",
+          detail: "Worker capabilities cannot exceed its owner's ceiling.",
+        });
+      }
+      const events = yield* decideCommandSequence({
+        readModel,
+        commands: [
+          {
+            type: "thread.create",
+            commandId: command.commandId,
+            threadId: command.threadId,
+            projectId: caller.projectId,
+            title: command.label,
+            modelSelection: command.modelSelection,
+            runtimeMode: caller.runtimeMode,
+            interactionMode: caller.interactionMode,
+            branch: caller.branch,
+            worktreePath: caller.worktreePath,
+            createdAt: command.createdAt,
+          },
+          {
+            type: "thread.turn.start",
+            commandId: command.commandId,
+            threadId: command.threadId,
+            message: {
+              messageId: MessageId.make(`worker-message:${command.commandId}`),
+              role: "user",
+              text: command.prompt,
+              attachments: [],
+            },
+            modelSelection: command.modelSelection,
+            runtimeMode: caller.runtimeMode,
+            interactionMode: caller.interactionMode,
+            createdAt: command.createdAt,
+          },
+        ],
+      });
+      return events.map((event) =>
+        event.type === "thread.created"
+          ? {
+              ...event,
+              payload: {
+                ...event.payload,
+                worker: {
+                  ownerThreadId: caller.id,
+                  rootThreadId,
+                  depth,
+                  spawnCommandId: command.commandId,
+                  spawnFingerprint: command.spawnFingerprint,
+                  label: command.label,
+                  runtimeModeCeiling: caller.runtimeMode,
+                  mcpCapabilityCeiling: command.mcpCapabilityCeiling,
+                  stopRequestedAt: null,
+                  lastStopSequence: null,
+                },
+              },
+            }
+          : event,
+      );
+    }
+    case "thread.worker.send": {
+      const caller = yield* requireThread({ readModel, command, threadId: command.callerThreadId });
+      if (caller.worker?.stopRequestedAt != null) {
+        return yield* new WorkerOperationError({
+          operation: "send",
+          code: "forbidden",
+          detail: "A stopped worker cannot initiate new work until its owner resumes it.",
+        });
+      }
+      const thread = yield* requireThread({ readModel, command, threadId: command.threadId });
+      yield* requireOwnedWorker(readModel, command.callerThreadId, thread, "send");
+      return yield* decideOrchestrationCommand({
+        readModel,
+        ...(workerStates !== undefined ? { workerStates } : {}),
+        command: {
+          type: "thread.turn.start",
+          commandId: command.commandId,
+          threadId: command.threadId,
+          message: {
+            messageId: MessageId.make(`worker-message:${command.commandId}`),
+            role: "user",
+            text: command.text,
+            attachments: [],
+          },
+          modelSelection: thread.modelSelection,
+          runtimeMode: thread.runtimeMode,
+          interactionMode: thread.interactionMode,
+          createdAt: command.createdAt,
+        },
+      });
+    }
+    case "thread.worker.stop": {
+      const thread = yield* requireThread({ readModel, command, threadId: command.threadId });
+      yield* requireOwnedWorker(readModel, command.callerThreadId, thread, "stop");
+      return yield* decideOrchestrationCommand({
+        readModel,
+        command: {
+          type: "thread.session.stop",
+          commandId: command.commandId,
+          threadId: command.threadId,
+          createdAt: command.createdAt,
+        },
+      });
+    }
     case "project.create": {
       yield* requireProjectAbsent({
         readModel,
@@ -342,6 +583,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
       if (activeThreads.length > 0) {
         return yield* decideCommandSequence({
           readModel,
+          ...(workerStates !== undefined ? { workerStates } : {}),
           commands: [
             ...activeThreads.map(
               (thread): Extract<OrchestrationCommand, { type: "thread.delete" }> => ({
@@ -416,8 +658,39 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         command,
         threadId: command.threadId,
       });
+      const ownedIds = new Set<ThreadId>([command.threadId]);
+      for (let depth = 0; depth < WORKER_MAX_DEPTH; depth += 1) {
+        for (const thread of readModel.threads) {
+          if (
+            thread.deletedAt === null &&
+            thread.worker &&
+            ownedIds.has(thread.worker.ownerThreadId)
+          ) {
+            ownedIds.add(thread.id);
+          }
+        }
+      }
+      const descendantStops: PlannedOrchestrationEvent[] = [];
+      for (const state of workerStates ?? []) {
+        if (
+          state.thread.id === command.threadId ||
+          !ownedIds.has(state.thread.id) ||
+          !workerIsLive(state)
+        )
+          continue;
+        const stop = yield* decideOrchestrationCommand({
+          readModel,
+          command: {
+            type: "thread.session.stop",
+            commandId: command.commandId,
+            threadId: state.thread.id,
+            createdAt: yield* nowIso,
+          },
+        });
+        descendantStops.push(...(Array.isArray(stop) ? stop : [stop]));
+      }
       const occurredAt = yield* nowIso;
-      return {
+      const deleted: PlannedOrchestrationEvent = {
         ...(yield* withEventBase({
           aggregateKind: "thread",
           aggregateId: command.threadId,
@@ -430,6 +703,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           deletedAt: occurredAt,
         },
       };
+      return descendantStops.length === 0 ? deleted : [...descendantStops, deleted];
     }
 
     case "thread.archive": {
@@ -926,6 +1200,17 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         command,
         threadId: command.threadId,
       });
+      if (
+        thread.worker &&
+        ((command.branch !== undefined && command.branch !== thread.branch) ||
+          (command.worktreePath !== undefined && command.worktreePath !== thread.worktreePath))
+      ) {
+        return yield* new WorkerOperationError({
+          operation: "send",
+          code: "forbidden",
+          detail: "Owned workers share their owner's checkout and branch.",
+        });
+      }
       // Old clients only see the derived single link. Unlink that request through
       // the same command path as modern clients, including stack dismissal, while
       // retaining other links they cannot see. Historical metadata events still replay unchanged.
@@ -1342,11 +1627,12 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
     }
 
     case "thread.runtime-mode.set": {
-      yield* requireThread({
+      const thread = yield* requireThread({
         readModel,
         command,
         threadId: command.threadId,
       });
+      if (thread.worker) yield* requireWorkerChain(readModel, thread, "send", command.runtimeMode);
       const occurredAt = yield* nowIso;
       return {
         ...(yield* withEventBase({
@@ -1399,6 +1685,15 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         command,
         threadId: command.threadId,
       });
+      if (targetThread.worker) {
+        yield* requireWorkerChain(readModel, targetThread, "send");
+        yield* requireWorkerAdmission(
+          targetThread.worker.rootThreadId,
+          workerStates ?? [],
+          "send",
+          targetThread.id,
+        );
+      }
       const sourceProposedPlan = command.sourceProposedPlan;
       const sourceThread = sourceProposedPlan
         ? yield* requireThread({

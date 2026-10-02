@@ -41,6 +41,28 @@ in a new thread's model picker to add or remove them. A regular click returns to
 single model. Choose a base branch and send. Each selection starts a separate thread
 and worktree while you stay in the new thread composer. This requires a Git project.
 
+## Delegate work to an agent
+
+Ask the agent in a thread to delegate a task to a T3 worker. It can choose a
+configured provider and model, check progress, read the result, and stop the
+worker. Workers appear as regular threads on your connected clients.
+
+A worker shares its owner's project and working directory. Give workers separate
+files or read-only tasks when running them together. They do not receive isolated
+worktrees automatically, so avoid concurrent Git operations or file restores.
+
+Up to four workers can be active under one root thread, with sixteen across the
+environment. A worker can delegate one level further. Follow-ups are accepted
+only after the worker's current work has settled, including approvals and native
+background tasks. Stopping cancels its current work without deleting the thread;
+the owner can send another task after cancellation finishes. Deleting an owner
+cancels its descendants' work but keeps their thread histories. If a server
+restart interrupts a queued worker, send an explicit follow-up to continue.
+
+These workers are separate from a provider's own subagents. They require a
+provider session with T3's agent tools enabled. There is no separate delegation
+button or worker fleet view.
+
 ## Pin and reorder threads
 
 Pin a thread from its menu to keep it above your active work.

@@ -1022,6 +1022,203 @@ describe("ProviderCommandReactor", () => {
     }),
   );
 
+  const spawnTestWorker = (harness: Awaited<ReturnType<typeof createHarness>>) =>
+    harness.engine.dispatch({
+      type: "thread.worker.spawn",
+      commandId: CommandId.make("spawn-stop-race-worker"),
+      threadId: ThreadId.make("stop-race-worker"),
+      callerThreadId: ThreadId.make("thread-1"),
+      label: "Stop race worker",
+      prompt: "Do scoped work",
+      modelSelection: createModelSelection(ProviderInstanceId.make("codex"), "gpt-5-codex"),
+      mcpCapabilityCeiling: ["workers", "pull-requests"],
+      spawnFingerprint: "stop-race-worker",
+      createdAt: "2026-01-01T00:00:00.000Z",
+    });
+
+  effectIt.effect("worker first turn never renames the owner's temporary worktree branch", () =>
+    Effect.gen(function* () {
+      const sent = yield* Deferred.make<void>();
+      const harness = yield* Effect.promise(() => createHarness());
+      yield* harness.engine.dispatch({
+        type: "thread.meta.update",
+        commandId: CommandId.make("owner-temp-branch"),
+        threadId: ThreadId.make("thread-1"),
+        branch: "t3code/1234abcd",
+        worktreePath: "/tmp/provider-project-worktree",
+      });
+      harness.sendTurn.mockImplementationOnce(() =>
+        Deferred.succeed(sent, undefined).pipe(
+          Effect.as({
+            threadId: ThreadId.make("stop-race-worker"),
+            turnId: asTurnId("worker-branch-turn"),
+          }),
+        ),
+      );
+      yield* spawnTestWorker(harness);
+      yield* Deferred.await(sent);
+      yield* Effect.promise(() => harness.drain());
+      expect(harness.generateBranchName).not.toHaveBeenCalled();
+      expect(harness.renameBranch).not.toHaveBeenCalled();
+    }),
+  );
+
+  effectIt.effect(
+    "cancelled worker startup queued before activation never launches, but a follow-up reopens it",
+    () =>
+      Effect.gen(function* () {
+        const activation = yield* Deferred.make<void>();
+        const followupSent = yield* Deferred.make<void>();
+        const harness = yield* Effect.promise(() =>
+          createHarness({ serverActivation: Deferred.await(activation) }),
+        );
+        yield* spawnTestWorker(harness);
+        const stopped = yield* harness.engine.dispatch({
+          type: "thread.worker.stop",
+          commandId: CommandId.make("stop-before-activation"),
+          callerThreadId: ThreadId.make("thread-1"),
+          threadId: ThreadId.make("stop-race-worker"),
+          createdAt: "2026-01-01T00:00:01.000Z",
+        });
+        yield* Deferred.succeed(activation, undefined);
+        yield* Effect.promise(() => harness.drain());
+        expect(harness.startSession).not.toHaveBeenCalled();
+        expect(harness.sendTurn).not.toHaveBeenCalled();
+        const stoppedWorker = yield* harness.snapshotQuery
+          .getThreadShellById(ThreadId.make("stop-race-worker"))
+          .pipe(Effect.map(Option.getOrThrow));
+        expect(stoppedWorker.worker?.lastStopSequence).toBeLessThanOrEqual(stopped.sequence);
+        expect(stoppedWorker.worker?.stopRequestedAt).not.toBeNull();
+        harness.sendTurn.mockImplementationOnce(() =>
+          Deferred.succeed(followupSent, undefined).pipe(
+            Effect.as({
+              threadId: ThreadId.make("stop-race-worker"),
+              turnId: asTurnId("followup-turn"),
+            }),
+          ),
+        );
+        yield* harness.engine.dispatch({
+          type: "thread.worker.send",
+          commandId: CommandId.make("reopen-worker-followup"),
+          callerThreadId: ThreadId.make("thread-1"),
+          threadId: ThreadId.make("stop-race-worker"),
+          text: "Resume explicitly",
+          createdAt: "2026-01-01T00:00:02.000Z",
+        });
+        yield* Deferred.await(followupSent);
+        yield* Effect.promise(() => harness.drain());
+        expect(harness.startSession).toHaveBeenCalledTimes(1);
+        expect(harness.sendTurn).toHaveBeenCalledTimes(1);
+      }),
+  );
+
+  effectIt.effect("stop during the native worker startup handshake prevents its delayed send", () =>
+    Effect.gen(function* () {
+      const enteredStartup = yield* Deferred.make<void>();
+      const releaseStartup = yield* Deferred.make<void>();
+      const nativeStopped = yield* Deferred.make<void>();
+      const harness = yield* Effect.promise(() =>
+        createHarness({
+          startSessionEffect: (session) =>
+            Deferred.succeed(enteredStartup, undefined).pipe(
+              Effect.andThen(Deferred.await(releaseStartup)),
+              Effect.as(session),
+            ),
+          stopSessionEffect: () => Deferred.succeed(nativeStopped, undefined).pipe(Effect.asVoid),
+        }),
+      );
+      yield* spawnTestWorker(harness);
+      yield* Deferred.await(enteredStartup);
+      yield* harness.engine.dispatch({
+        type: "thread.worker.stop",
+        commandId: CommandId.make("stop-during-native-start"),
+        callerThreadId: ThreadId.make("thread-1"),
+        threadId: ThreadId.make("stop-race-worker"),
+        createdAt: "2026-01-01T00:00:01.000Z",
+      });
+      yield* Deferred.succeed(releaseStartup, undefined);
+      yield* Deferred.await(nativeStopped);
+      yield* Effect.promise(() => harness.drain());
+      expect(harness.sendTurn).not.toHaveBeenCalled();
+      expect(harness.runtimeSessions).toEqual([]);
+    }),
+  );
+
+  effectIt.effect(
+    "worker stop interrupts an in-flight forked send before stopping the native session",
+    () =>
+      Effect.gen(function* () {
+        const enteredSend = yield* Deferred.make<void>();
+        const cancelledSend = yield* Deferred.make<void>();
+        const nativeStopped = yield* Deferred.make<void>();
+        const harness = yield* Effect.promise(() =>
+          createHarness({
+            stopSessionEffect: () => Deferred.succeed(nativeStopped, undefined).pipe(Effect.asVoid),
+          }),
+        );
+        harness.sendTurn.mockImplementationOnce(() =>
+          Deferred.succeed(enteredSend, undefined).pipe(
+            Effect.andThen(Effect.never),
+            Effect.ensuring(Deferred.succeed(cancelledSend, undefined)),
+          ),
+        );
+        yield* spawnTestWorker(harness);
+        yield* Deferred.await(enteredSend);
+        yield* harness.engine.dispatch({
+          type: "thread.worker.stop",
+          commandId: CommandId.make("stop-during-worker-send"),
+          callerThreadId: ThreadId.make("thread-1"),
+          threadId: ThreadId.make("stop-race-worker"),
+          createdAt: "2026-01-01T00:00:01.000Z",
+        });
+        yield* Deferred.await(cancelledSend);
+        yield* Deferred.await(nativeStopped);
+        yield* Effect.promise(() => harness.drain());
+        expect(harness.runtimeSessions).toEqual([]);
+      }),
+  );
+
+  for (const deletedThread of ["thread-1", "stop-race-worker"] as const) {
+    effectIt.effect(`deletion of ${deletedThread} cancels live worker execution`, () =>
+      Effect.gen(function* () {
+        const enteredSend = yield* Deferred.make<void>();
+        const cancelledSend = yield* Deferred.make<void>();
+        const nativeStopped = yield* Deferred.make<void>();
+        const harness = yield* Effect.promise(() =>
+          createHarness({
+            stopSessionEffect: () => Deferred.succeed(nativeStopped, undefined).pipe(Effect.asVoid),
+          }),
+        );
+        harness.sendTurn.mockImplementationOnce(() =>
+          Deferred.succeed(enteredSend, undefined).pipe(
+            Effect.andThen(Effect.never),
+            Effect.ensuring(Deferred.succeed(cancelledSend, undefined)),
+          ),
+        );
+        yield* spawnTestWorker(harness);
+        yield* Deferred.await(enteredSend);
+        yield* harness.engine.dispatch({
+          type: "thread.delete",
+          commandId: CommandId.make("delete-live-worker-owner"),
+          threadId: ThreadId.make(deletedThread),
+        });
+        yield* Deferred.await(cancelledSend);
+        yield* Deferred.await(nativeStopped);
+        yield* Effect.promise(() => harness.drain());
+        expect(harness.runtimeSessions).toEqual([]);
+        const worker = yield* harness.snapshotQuery.getThreadShellById(
+          ThreadId.make("stop-race-worker"),
+        );
+        if (deletedThread === "thread-1") {
+          expect(Option.getOrThrow(worker).worker?.lastStopSequence).not.toBeNull();
+          expect(Option.getOrThrow(worker).session?.status).toBe("stopped");
+        } else {
+          expect(Option.isNone(worker)).toBe(true);
+        }
+      }),
+    );
+  }
+
   effectIt.effect("retains a turn dispatched immediately after start until activation", () =>
     Effect.gen(function* () {
       const activation = yield* Deferred.make<void>();

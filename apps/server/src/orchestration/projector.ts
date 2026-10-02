@@ -347,6 +347,33 @@ export function projectEvent(
   };
 
   switch (event.type) {
+    case "thread.session-stop-requested":
+    case "thread.turn-start-requested":
+      return Effect.succeed({
+        ...nextBase,
+        threads: nextBase.threads.map((thread) =>
+          thread.id !== event.payload.threadId || !thread.worker
+            ? thread
+            : {
+                ...thread,
+                worker:
+                  event.type === "thread.session-stop-requested"
+                    ? {
+                        ...thread.worker,
+                        stopRequestedAt: event.payload.createdAt,
+                        lastStopSequence: event.sequence,
+                      }
+                    : {
+                        ...thread.worker,
+                        stopRequestedAt:
+                          event.sequence > (thread.worker.lastStopSequence ?? -1)
+                            ? null
+                            : thread.worker.stopRequestedAt,
+                      },
+                updatedAt: event.payload.createdAt,
+              },
+        ),
+      });
     case "project.created":
       return decodeForEvent(ProjectCreatedPayload, event.payload, event.type, "payload").pipe(
         Effect.map((payload) => {
@@ -441,6 +468,7 @@ export function projectEvent(
             projectId: payload.projectId,
             title: payload.title,
             modelSelection: payload.modelSelection,
+            worker: payload.worker ?? null,
             runtimeMode: payload.runtimeMode,
             interactionMode: payload.interactionMode,
             branch: payload.branch,

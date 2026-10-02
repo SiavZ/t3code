@@ -12,11 +12,17 @@ import {
   ProjectionThreadRepository,
   type ProjectionThreadRepositoryShape,
 } from "../Services/ProjectionThreads.ts";
-import { ModelSelection, ThreadLinkedPullRequest, ThreadTitleState } from "@t3tools/contracts";
+import {
+  ModelSelection,
+  ThreadLinkedPullRequest,
+  ThreadTitleState,
+  ThreadWorkerMetadata,
+} from "@t3tools/contracts";
 
 const ProjectionThreadDbRow = ProjectionThread.mapFields(
   Struct.assign({
     modelSelection: Schema.fromJsonString(ModelSelection),
+    worker: Schema.NullOr(Schema.fromJsonString(ThreadWorkerMetadata)),
     titleState: Schema.NullOr(Schema.fromJsonString(ThreadTitleState)),
     linkedPullRequest: Schema.NullOr(Schema.fromJsonString(ThreadLinkedPullRequest)),
     branchPullRequest: Schema.NullOr(Schema.fromJsonString(ThreadLinkedPullRequest)),
@@ -36,6 +42,7 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
           title,
           title_state_json,
           model_selection_json,
+          worker_json,
           runtime_mode,
           interaction_mode,
           branch,
@@ -69,6 +76,7 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
           ${row.title},
           ${row.titleState == null ? null : JSON.stringify(row.titleState)},
           ${JSON.stringify(row.modelSelection)},
+          ${row.worker == null ? null : JSON.stringify(row.worker)},
           ${row.runtimeMode},
           ${row.interactionMode},
           ${row.branch},
@@ -102,6 +110,7 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
           title = excluded.title,
           title_state_json = excluded.title_state_json,
           model_selection_json = excluded.model_selection_json,
+          worker_json = excluded.worker_json,
           runtime_mode = excluded.runtime_mode,
           interaction_mode = excluded.interaction_mode,
           branch = excluded.branch,
@@ -142,6 +151,7 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
           title,
           title_state_json AS "titleState",
           model_selection_json AS "modelSelection",
+          worker_json AS "worker",
           runtime_mode AS "runtimeMode",
           interaction_mode AS "interactionMode",
           branch,

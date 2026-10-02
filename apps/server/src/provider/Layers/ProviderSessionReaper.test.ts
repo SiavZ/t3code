@@ -233,6 +233,10 @@ describe("ProviderSessionReaper", () => {
       Layer.provideMerge(Layer.succeed(ProviderService, providerService)),
       Layer.provideMerge(
         Layer.succeed(ProjectionSnapshotQuery, {
+          getWorkerSpawnMetadata: () => Effect.die("unused"),
+          getWorkerAdmissionStates: () => Effect.die("unused"),
+          getWorkerState: () => Effect.die("unused"),
+          listWorkerStates: () => Effect.die("unused"),
           getUserInputActivity: () => Effect.die("unused"),
           listActivitiesByKind: () => Effect.die("unused"),
           getCommandReadModel: () => Effect.die("unused"),
