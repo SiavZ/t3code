@@ -1,15 +1,20 @@
 const assert = require("node:assert/strict");
+const fs = require("node:fs");
 const Module = require("node:module");
+const os = require("node:os");
+const path = require("node:path");
 const test = require("node:test");
 
-const checkout = require("node:path").resolve(__dirname, "..", "..");
+const checkout = path.resolve(__dirname, "..", "..");
 const tokenUrl = "http://localhost:5733/pair#token=SECRET_123";
 
-function loadExtension() {
+function loadExtension(options = {}) {
   const commands = new Map();
   const opened = [];
   const errors = [];
   const launchers = [];
+  const state = options.state || new Map();
+  let pickerCalls = 0;
   let onVisibility;
   let provider;
   const view = {
@@ -40,12 +45,13 @@ function loadExtension() {
   }
   const vscode = {
     workspace: {
-      workspaceFolders: [{ uri: { fsPath: checkout } }],
+      workspaceFolders: options.workspaceFolders || [{ uri: { fsPath: checkout } }],
       getConfiguration: () => ({ get: () => "node" }),
     },
     window: {
       createTreeView: (_id, options) => { provider = options.treeDataProvider; return view; },
       showErrorMessage: (message) => errors.push(message),
+      showOpenDialog: async () => { pickerCalls += 1; return options.selection; },
     },
     commands: {
       registerCommand: (id, action) => { commands.set(id, action); return { dispose() {} }; },
@@ -68,7 +74,14 @@ function loadExtension() {
   delete require.cache[require.resolve("./extension.js")];
   try {
     const extension = require("./extension.js");
-    return { extension, view, commands, opened, errors, launchers, get provider() { return provider; }, reveal: () => onVisibility({ visible: true }) };
+    const context = {
+      subscriptions: [],
+      globalState: {
+        get: (key) => state.get(key),
+        update: async (key, value) => { state.set(key, value); },
+      },
+    };
+    return { extension, context, state, view, commands, opened, errors, launchers, get pickerCalls() { return pickerCalls; }, get provider() { return provider; }, reveal: () => onVisibility({ visible: true }) };
   } finally {
     Module._load = originalLoad;
   }
@@ -78,8 +91,7 @@ const flush = () => new Promise((resolve) => setImmediate(resolve));
 
 test("Activity Bar view opens the source app, reuses browser tab, and offers stop", async () => {
   const host = loadExtension();
-  const context = { subscriptions: [] };
-  host.extension.activate(context);
+  host.extension.activate(host.context);
   await flush();
   assert.equal(host.launchers.length, 1);
   assert.equal(host.launchers[0].root, checkout);
@@ -90,7 +102,7 @@ test("Activity Bar view opens the source app, reuses browser tab, and offers sto
   host.reveal();
   await flush();
   assert.equal(host.opened[1].options.url, "http://localhost:5733");
-  assert.deepEqual(host.provider.getChildren().map((item) => item.label), ["Open T3 Code", "Stop source server"]);
+  assert.deepEqual(host.provider.getChildren().map((item) => item.label), ["Open T3 Code", "Stop source server", "Choose source checkout"]);
   host.commands.get("t3CodeSource.stop")();
   assert.equal(host.launchers[0].status, "stopped");
   host.reveal();
@@ -101,22 +113,64 @@ test("Activity Bar view opens the source app, reuses browser tab, and offers sto
   assert.equal(host.launchers[0].status, "stopped");
 });
 
-test("a non-source workspace fails without starting a server", async () => {
-  const host = loadExtension();
-  host.extension.activate({ subscriptions: [] });
+test("another project selects the source checkout once and remembers it", async () => {
+  const state = new Map();
+  const project = [{ uri: { fsPath: "/some/other/project" } }];
+  const host = loadExtension({ workspaceFolders: project, selection: [{ fsPath: checkout }], state });
+  host.extension.activate(host.context);
   await flush();
-  host.launchers[0].stop();
-  // A subsequent command in a different workspace is rejected before spawning.
-  const previous = host.launchers.length;
-  // The test helper owns the workspace object through the view's activation.
-  // Replace the checkout manifest check by temporarily making the folder absent.
-  const originalExistsSync = require("node:fs").existsSync;
-  require("node:fs").existsSync = () => false;
+  assert.equal(host.launchers[0].root, checkout);
+  assert.equal(host.pickerCalls, 1);
+  assert.equal(state.get("checkoutPath"), checkout);
+  assert.equal(host.opened[0].options.url, tokenUrl);
+  host.extension.deactivate();
+
+  const second = loadExtension({ workspaceFolders: project, state });
+  second.extension.activate(second.context);
+  await flush();
+  assert.equal(second.pickerCalls, 0);
+  assert.equal(second.launchers[0].root, checkout);
+  second.extension.deactivate();
+});
+
+test("canceling checkout selection does not start a server or show an error", async () => {
+  const host = loadExtension({ workspaceFolders: [{ uri: { fsPath: "/some/other/project" } }] });
+  host.extension.activate(host.context);
+  await flush();
+  assert.equal(host.pickerCalls, 1);
+  assert.deepEqual(host.launchers, []);
+  assert.deepEqual(host.errors, []);
+});
+
+test("rejects an unrelated selected directory without starting a server", async () => {
+  const host = loadExtension({
+    workspaceFolders: [{ uri: { fsPath: "/some/other/project" } }],
+    selection: [{ fsPath: "/some/other/project" }],
+  });
+  host.extension.activate(host.context);
+  await flush();
+  assert.deepEqual(host.launchers, []);
+  assert.match(host.errors.at(-1), /T3 Code source checkout/);
+});
+
+test("Choose source checkout switches the source runner from another project", async () => {
+  const alternate = fs.mkdtempSync(path.join(process.env.JCODE_SCRATCH_DIR || os.tmpdir(), "t3-vscode-checkout-"));
+  fs.mkdirSync(path.join(alternate, "scripts"));
+  fs.writeFileSync(path.join(alternate, "scripts", "dev-runner.ts"), "");
+  fs.writeFileSync(path.join(alternate, "package.json"), '{"name":"@t3tools/monorepo"}');
+  const choices = { selection: [{ fsPath: checkout }] };
   try {
-    await host.commands.get("t3CodeSource.open")();
+    const host = loadExtension(choices);
+    host.extension.activate(host.context);
+    await flush();
+    const first = host.launchers[0];
+    choices.selection = [{ fsPath: alternate }];
+    await host.commands.get("t3CodeSource.chooseCheckout")();
+    assert.equal(first.status, "stopped");
+    assert.equal(host.launchers[1].root, alternate);
+    assert.equal(host.state.get("checkoutPath"), alternate);
+    host.extension.deactivate();
   } finally {
-    require("node:fs").existsSync = originalExistsSync;
+    fs.rmSync(alternate, { recursive: true, force: true });
   }
-  assert.equal(host.launchers.length, previous);
-  assert.match(host.errors.at(-1), /source checkout/);
 });

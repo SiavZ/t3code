@@ -5,17 +5,37 @@ const { SourceLauncher } = require("./launcher.cjs");
 
 let launcher;
 
-function sourceRoot() {
-  for (const folder of vscode.workspace.workspaceFolders || []) {
-    const root = folder.uri.fsPath;
-    if (!fs.existsSync(path.join(root, "scripts", "dev-runner.ts"))) continue;
-    try {
-      if (JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf8")).name === "@t3tools/monorepo") {
-        return root;
-      }
-    } catch { /* Other workspace folders are not T3 Code checkouts. */ }
+function isSourceRoot(root) {
+  if (!fs.existsSync(path.join(root, "scripts", "dev-runner.ts"))) return false;
+  try {
+    return JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf8")).name === "@t3tools/monorepo";
+  } catch {
+    return false;
   }
-  return undefined;
+}
+
+async function sourceRoot(context, choose = false) {
+  if (!choose) {
+    const saved = context.globalState.get("checkoutPath");
+    if (saved && isSourceRoot(saved)) return saved;
+  }
+  for (const folder of vscode.workspace.workspaceFolders || []) {
+    if (!choose && isSourceRoot(folder.uri.fsPath)) return folder.uri.fsPath;
+  }
+  const selection = await vscode.window.showOpenDialog({
+    canSelectFiles: false,
+    canSelectFolders: true,
+    canSelectMany: false,
+    openLabel: "Use T3 Code source checkout",
+  });
+  const root = selection?.[0]?.fsPath;
+  if (!root) return undefined;
+  if (!isSourceRoot(root)) {
+    vscode.window.showErrorMessage("Select the T3 Code source checkout, containing package.json and scripts/dev-runner.ts.");
+    return undefined;
+  }
+  await context.globalState.update("checkoutPath", root);
+  return root;
 }
 
 function activate(context) {
@@ -31,33 +51,33 @@ function activate(context) {
       const open = new vscode.TreeItem("Open T3 Code");
       open.iconPath = new vscode.ThemeIcon("browser");
       open.command = { command: "t3CodeSource.open", title: "Open T3 Code" };
-      if (status !== "ready") return [open];
+      const choose = new vscode.TreeItem("Choose source checkout");
+      choose.iconPath = new vscode.ThemeIcon("folder-opened");
+      choose.command = { command: "t3CodeSource.chooseCheckout", title: "Choose source checkout" };
+      if (status !== "ready") return [open, choose];
       const stop = new vscode.TreeItem("Stop source server");
       stop.iconPath = new vscode.ThemeIcon("debug-stop");
       stop.command = { command: "t3CodeSource.stop", title: "Stop source server" };
-      return [open, stop];
+      return [open, stop, choose];
     },
   };
   const view = vscode.window.createTreeView("t3CodeSource.actions", { treeDataProvider: provider });
   let opening;
   let openedForChild;
 
-  async function open() {
+  async function open(choose = false) {
     if (opening) return opening;
-    const root = sourceRoot();
-    if (!root) {
-      vscode.window.showErrorMessage("Open the T3 Code source checkout as a VS Code workspace first.");
-      return;
-    }
-    if (!launcher || launcher.root !== root) {
-      launcher?.stop();
-      launcher = new SourceLauncher(root, {
-        node: vscode.workspace.getConfiguration("t3CodeSource").get("nodePath", "node"),
-        onState: () => changed.fire(),
-      });
-      openedForChild = undefined;
-    }
     opening = (async () => {
+      const root = await sourceRoot(context, choose);
+      if (!root) return;
+      if (!launcher || launcher.root !== root) {
+        launcher?.stop();
+        launcher = new SourceLauncher(root, {
+          node: vscode.workspace.getConfiguration("t3CodeSource").get("nodePath", "node"),
+          onState: () => changed.fire(),
+        });
+        openedForChild = undefined;
+      }
       const url = await launcher.start();
       const firstOpen = openedForChild !== launcher.child;
       const target = firstOpen ? url.href : url.origin;
@@ -84,7 +104,8 @@ function activate(context) {
   context.subscriptions.push(
     changed,
     view,
-    vscode.commands.registerCommand("t3CodeSource.open", open),
+    vscode.commands.registerCommand("t3CodeSource.open", () => open()),
+    vscode.commands.registerCommand("t3CodeSource.chooseCheckout", () => open(true)),
     vscode.commands.registerCommand("t3CodeSource.stop", stop),
     view.onDidChangeVisibility(({ visible }) => {
       if (visible) void open();
