@@ -1,0 +1,69 @@
+{
+  "name": "t3-code-source-dev",
+  "displayName": "T3 Code Source Dev",
+  "description": "Open the T3 Code source checkout in VS Code without a terminal.",
+  "version": "0.0.1",
+  "publisher": "t3tools",
+  "private": true,
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/pingdotgg/t3code.git",
+    "directory": "apps/vscode"
+  },
+  "engines": {
+    "vscode": "^1.113.0"
+  },
+  "extensionKind": ["workspace"],
+  "main": "./extension.js",
+  "activationEvents": [
+    "onView:t3CodeSource.actions",
+    "onCommand:t3CodeSource.open",
+    "onCommand:t3CodeSource.stop"
+  ],
+  "scripts": {
+    "test": "node --test *.test.cjs",
+    "package": "npx --yes @vscode/vsce@4.0.0 package --no-dependencies"
+  },
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "t3CodeSource",
+          "title": "T3 Code",
+          "icon": "assets/icon.svg"
+        }
+      ]
+    },
+    "views": {
+      "t3CodeSource": [
+        {
+          "id": "t3CodeSource.actions",
+          "name": "T3 Code Source"
+        }
+      ]
+    },
+    "commands": [
+      {
+        "command": "t3CodeSource.open",
+        "title": "T3 Code: Open from Source",
+        "icon": "$(browser)"
+      },
+      {
+        "command": "t3CodeSource.stop",
+        "title": "T3 Code: Stop Source Server",
+        "icon": "$(debug-stop)"
+      }
+    ],
+    "configuration": {
+      "title": "T3 Code Source",
+      "properties": {
+        "t3CodeSource.nodePath": {
+          "type": "string",
+          "default": "node",
+          "description": "Node.js 24 executable used to start this checkout's dev runner."
+        }
+      }
+    }
+  }
+}
