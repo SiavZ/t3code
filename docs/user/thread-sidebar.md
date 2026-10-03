@@ -65,6 +65,11 @@ restart interrupts a queued worker, send an explicit follow-up to continue.
 These workers are separate from a provider's own subagents. They require a
 provider session with T3's agent tools enabled.
 
+For dependent tasks, ask the agent to create a coordination plan with explicit
+prerequisites and review gates. Workers can exchange stored messages and report
+results to the plan, but a stored message does not inject a prompt into a busy
+native session. A cancelled or interrupted attempt needs an explicit retry.
+
 ## Pin and reorder threads
 
 Pin a thread from its menu to keep it above your active work.

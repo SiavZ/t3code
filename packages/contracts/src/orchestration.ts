@@ -1,5 +1,11 @@
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
+import {
+  CoordinationPlan,
+  CoordinationWriteInput,
+  CoordinationMailbox,
+  CoordinationMailboxWriteInput,
+} from "./coordination.ts";
 import * as SchemaIssue from "effect/SchemaIssue";
 import * as SchemaTransformation from "effect/SchemaTransformation";
 import * as Struct from "effect/Struct";
@@ -1736,6 +1742,59 @@ const ThreadWorkerStopCommand = Schema.Struct({
 });
 
 const InternalOrchestrationCommand = Schema.Union([
+  Schema.Struct({
+    type: Schema.Literal("coordination.mailbox.write"),
+    commandId: CommandId,
+    threadId: ThreadId,
+    input: Schema.suspend(() => CoordinationMailboxWriteInput),
+    createdAt: IsoDateTime,
+  }),
+  Schema.Struct({
+    type: Schema.Literal("coordination.plan.write"),
+    commandId: CommandId,
+    threadId: ThreadId,
+    executionAuthority: Schema.optional(ThreadUnattendedAuthority),
+    input: Schema.suspend(() => CoordinationWriteInput),
+    createdAt: IsoDateTime,
+  }),
+  Schema.Struct({
+    type: Schema.Literal("coordination.plan.dispatch"),
+    commandId: CommandId,
+    threadId: ThreadId,
+    planId: TrimmedNonEmptyString,
+    expectedRevision: NonNegativeInt,
+    nodeId: TrimmedNonEmptyString,
+    createdAt: IsoDateTime,
+  }),
+  Schema.Struct({
+    type: Schema.Literal("coordination.plan.abandon"),
+    commandId: CommandId,
+    threadId: ThreadId,
+    planId: TrimmedNonEmptyString,
+    expectedRevision: NonNegativeInt,
+    nodeId: TrimmedNonEmptyString,
+    expectedMessageId: MessageId,
+    createdAt: IsoDateTime,
+  }),
+  Schema.Struct({
+    type: Schema.Literal("coordination.plan.recover"),
+    commandId: CommandId,
+    threadId: ThreadId,
+    planId: TrimmedNonEmptyString,
+    expectedRevision: NonNegativeInt,
+    createdAt: IsoDateTime,
+  }),
+  Schema.Struct({
+    type: Schema.Literal("coordination.plan.settle"),
+    commandId: CommandId,
+    threadId: ThreadId,
+    planId: TrimmedNonEmptyString,
+    expectedRevision: NonNegativeInt,
+    nodeId: TrimmedNonEmptyString,
+    turnId: TurnId,
+    outcome: Schema.Literals(["completed", "failed", "interrupted"]),
+    createdAt: IsoDateTime,
+  }),
   ThreadWorkerSpawnCommand,
   ThreadWorkerSendCommand,
   ThreadWorkerStopCommand,
@@ -1768,6 +1827,8 @@ export const OrchestrationCommand = Schema.Union([
 export type OrchestrationCommand = typeof OrchestrationCommand.Type;
 
 export const OrchestrationEventType = Schema.Literals([
+  "coordination.mailbox.updated",
+  "coordination.plan.updated",
   "project.created",
   "project.meta-updated",
   "project.deleted",
@@ -2099,6 +2160,7 @@ export const OrchestrationClientOrigin = Schema.Struct({
 export type OrchestrationClientOrigin = typeof OrchestrationClientOrigin.Type;
 
 export const OrchestrationEventMetadata = Schema.Struct({
+  coordinationFingerprint: Schema.optional(TrimmedNonEmptyString),
   workerCommand: Schema.optional(
     Schema.Struct({
       type: Schema.Literals(["thread.worker.spawn", "thread.worker.send", "thread.worker.stop"]),
@@ -2135,6 +2197,16 @@ const EventBaseFields = {
 } as const;
 
 export const OrchestrationEvent = Schema.Union([
+  Schema.Struct({
+    ...EventBaseFields,
+    type: Schema.Literal("coordination.mailbox.updated"),
+    payload: Schema.Struct({ mailbox: Schema.suspend(() => CoordinationMailbox) }),
+  }),
+  Schema.Struct({
+    ...EventBaseFields,
+    type: Schema.Literal("coordination.plan.updated"),
+    payload: Schema.Struct({ plan: Schema.suspend(() => CoordinationPlan) }),
+  }),
   Schema.Struct({
     ...EventBaseFields,
     type: Schema.Literal("project.created"),

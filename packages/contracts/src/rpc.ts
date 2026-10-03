@@ -8,6 +8,7 @@ import {
 import * as Schema from "effect/Schema";
 import * as Rpc from "effect/unstable/rpc/Rpc";
 import * as RpcGroup from "effect/unstable/rpc/RpcGroup";
+import * as Coordination from "./coordination.ts";
 import * as Scheduled from "./scheduledWork.ts";
 import * as Grants from "./unattendedGrants.ts";
 import {
@@ -305,6 +306,10 @@ export const WS_METHODS = {
   unattendedGrantCreate: "unattendedGrants.create",
   unattendedGrantList: "unattendedGrants.list",
   unattendedGrantRevoke: "unattendedGrants.revoke",
+  coordinationMailboxRead: "coordination.mailboxRead",
+  coordinationMailboxWrite: "coordination.mailboxWrite",
+  coordinationRead: "coordination.read",
+  coordinationWrite: "coordination.write",
   workersSpawn: "workers.spawn",
   workersList: "workers.list",
   workersGet: "workers.get",
@@ -1508,6 +1513,16 @@ const WsWorkersWaitRpc = Rpc.make(WS_METHODS.workersWait, {
 // Parity tool RPCs live in their own group. One group holding every RPC exceeds the
 // compiler's instantiation depth in the server's handler layer.
 export const ParityToolsRpcGroup = RpcGroup.make(
+  Rpc.make(WS_METHODS.coordinationMailboxRead, {
+    payload: Coordination.CoordinationMailboxReadInput,
+    success: Coordination.CoordinationMailbox,
+    error: Schema.Union([Coordination.CoordinationError, EnvironmentAuthorizationError]),
+  }),
+  Rpc.make(WS_METHODS.coordinationMailboxWrite, {
+    payload: Coordination.CoordinationMailboxWriteInput,
+    success: Coordination.CoordinationMailbox,
+    error: Schema.Union([Coordination.CoordinationError, EnvironmentAuthorizationError]),
+  }),
   Rpc.make(WS_METHODS.unattendedGrantCreate, {
     payload: Grants.UnattendedGrantCreateInput,
     success: Grants.UnattendedGrant,
@@ -1522,6 +1537,16 @@ export const ParityToolsRpcGroup = RpcGroup.make(
     payload: Grants.UnattendedGrantReadInput,
     success: Grants.UnattendedGrant,
     error: Schema.Union([Scheduled.ScheduledWorkError, EnvironmentAuthorizationError]),
+  }),
+  Rpc.make(WS_METHODS.coordinationRead, {
+    payload: Coordination.CoordinationReadInput,
+    success: Coordination.CoordinationPlan,
+    error: Schema.Union([Coordination.CoordinationError, EnvironmentAuthorizationError]),
+  }),
+  Rpc.make(WS_METHODS.coordinationWrite, {
+    payload: Coordination.CoordinationWriteInput,
+    success: Coordination.CoordinationPlan,
+    error: Schema.Union([Coordination.CoordinationError, EnvironmentAuthorizationError]),
   }),
 );
 

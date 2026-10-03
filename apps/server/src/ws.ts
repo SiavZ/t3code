@@ -108,6 +108,7 @@ import {
 import * as OrchestrationEngine from "./orchestration/Services/OrchestrationEngine.ts";
 import * as OwnedWorkers from "./orchestration/OwnedWorkers.ts";
 import * as UnattendedGrants from "./orchestration/UnattendedGrants.ts";
+import * as CoordinationPlans from "./orchestration/CoordinationPlans.ts";
 import * as ProjectionSnapshotQuery from "./orchestration/Services/ProjectionSnapshotQuery.ts";
 import { ThreadDeletionReactor } from "./orchestration/Services/ThreadDeletionReactor.ts";
 import {
@@ -518,12 +519,17 @@ const makeParityToolsRpcLayer = () =>
   ParityToolsRpcGroup.toLayer(
     Effect.gen(function* () {
       const unattendedGrants = yield* UnattendedGrants.UnattendedGrants;
+      const coordinationPlans = yield* CoordinationPlans.CoordinationPlans;
       return ParityToolsRpcGroup.of({
         [WS_METHODS.unattendedGrantCreate]: (input) =>
           unattendedGrants.create(input, { source: "client" }),
         [WS_METHODS.unattendedGrantList]: (input) => unattendedGrants.list(input),
         [WS_METHODS.unattendedGrantRevoke]: (input) =>
           unattendedGrants.revoke(input, { source: "client" }),
+        [WS_METHODS.coordinationMailboxRead]: (input) => coordinationPlans.mailboxRead(input),
+        [WS_METHODS.coordinationMailboxWrite]: (input) => coordinationPlans.mailboxWrite(input),
+        [WS_METHODS.coordinationRead]: (input) => coordinationPlans.read(input),
+        [WS_METHODS.coordinationWrite]: (input) => coordinationPlans.write(input),
       });
     }),
   );
@@ -4164,6 +4170,7 @@ export const websocketRpcRouteLayer = Layer.unwrap(
     const pullRequests = yield* PullRequestService.PullRequestService;
     const ownedWorkers = yield* OwnedWorkers.OwnedWorkers;
     const unattendedGrants = yield* UnattendedGrants.UnattendedGrants;
+    const coordinationPlans = yield* CoordinationPlans.CoordinationPlans;
     const sql = yield* SqlClient.SqlClient;
     return HttpRouter.add(
       "GET",
@@ -4212,6 +4219,9 @@ export const websocketRpcRouteLayer = Layer.unwrap(
                 Layer.provide(Layer.succeed(UnattendedGrants.UnattendedGrants, unattendedGrants)),
               )
               .pipe(
+                Layer.provide(
+                  Layer.succeed(CoordinationPlans.CoordinationPlans, coordinationPlans),
+                ),
                 Layer.provide(
                   SourceControlDiscovery.layer.pipe(
                     Layer.provide(

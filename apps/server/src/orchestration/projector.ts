@@ -347,6 +347,9 @@ export function projectEvent(
   };
 
   switch (event.type) {
+    case "coordination.plan.updated":
+    case "coordination.mailbox.updated":
+      return Effect.succeed(nextBase);
     case "thread.session-stop-requested":
     case "thread.turn-start-requested":
       return Effect.succeed({

@@ -16,6 +16,13 @@ import {
 } from "./RpcAuthorization.ts";
 
 describe("RPC authorization scopes", () => {
+  it("keeps parity observation readable without granting mutation or host execution", () => {
+    for (const method of [WS_METHODS.coordinationRead, WS_METHODS.coordinationMailboxRead])
+      expect(requiredScopeForRpcMethod(method)).toBe(AuthOrchestrationReadScope);
+    for (const method of [WS_METHODS.coordinationWrite, WS_METHODS.coordinationMailboxWrite])
+      expect(requiredScopeForRpcMethod(method)).toBe(AuthOrchestrationOperateScope);
+  });
+
   it("requires administrative permission before granting unattended authority or configuring executable integrations", () => {
     for (const method of [WS_METHODS.unattendedGrantCreate, WS_METHODS.unattendedGrantRevoke])
       expect(requiredScopeForRpcMethod(method)).toBe(AuthAccessWriteScope);

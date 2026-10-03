@@ -1,3 +1,4 @@
+import { CoordinationMailbox } from "@t3tools/contracts";
 import {
   ApprovalRequestId,
   isImportedAgentSessionMessageId,
@@ -74,6 +75,7 @@ export const ORCHESTRATION_PROJECTOR_NAMES = {
   threadTurns: "projection.thread-turns",
   checkpoints: "projection.checkpoints",
   pendingApprovals: "projection.pending-approvals",
+  coordination: "projection.coordination",
 } as const;
 
 type ProjectorName =
@@ -1448,12 +1450,6 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
           });
           return;
 
-        case "thread.deleted":
-          yield* sql`DELETE FROM projection_thread_activation_authorities WHERE thread_id = ${event.payload.threadId}`.pipe(
-            Effect.mapError(toPersistenceSqlError("ProjectionPipeline.activationAuthority")),
-          );
-          return;
-
         case "thread.turn-start-requested": {
           yield* sql`INSERT INTO projection_thread_activation_authorities (thread_id, message_id, event_sequence, authority_json)
             VALUES (${event.payload.threadId}, ${event.payload.messageId}, ${event.sequence}, ${event.payload.unattendedAuthority === undefined ? null : JSON.stringify(event.payload.unattendedAuthority)})
@@ -2026,6 +2022,76 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
     });
 
     const projectors: ReadonlyArray<ProjectorDefinition> = [
+      {
+        name: ORCHESTRATION_PROJECTOR_NAMES.coordination,
+        apply: Effect.fn("applyCoordinationProjection")(function* (event) {
+          if (event.type === "thread.deleted") {
+            const thread = yield* projectionThreadRepository.getById({
+              threadId: event.payload.threadId,
+            });
+            yield* sql`DELETE FROM projection_coordination_plans WHERE root_thread_id = ${event.payload.threadId}`.pipe(
+              Effect.mapError(toPersistenceSqlError("coordination root deletion")),
+            );
+            yield* sql`DELETE FROM projection_coordination_mailboxes WHERE root_thread_id = ${event.payload.threadId}`.pipe(
+              Effect.mapError(toPersistenceSqlError("coordination mailbox deletion")),
+            );
+            yield* sql`DELETE FROM projection_thread_activation_authorities WHERE thread_id = ${event.payload.threadId}`.pipe(
+              Effect.mapError(toPersistenceSqlError("activation authority deletion")),
+            );
+            const rootId = Option.isSome(thread) ? thread.value.worker?.rootThreadId : undefined;
+            if (rootId !== undefined) {
+              const rows = yield* sql<{
+                document_json: string;
+              }>`SELECT document_json FROM projection_coordination_mailboxes WHERE root_thread_id = ${rootId}`.pipe(
+                Effect.mapError(toPersistenceSqlError("coordination recipient deletion")),
+              );
+              if (rows[0]) {
+                const mailbox = yield* Schema.decodeUnknownEffect(
+                  Schema.fromJsonString(CoordinationMailbox),
+                )(rows[0].document_json).pipe(
+                  Effect.mapError(toPersistenceSqlError("coordination mailbox decode")),
+                );
+                const next = {
+                  ...mailbox,
+                  revision: mailbox.revision + 1,
+                  envelopes: mailbox.envelopes.map((envelope) =>
+                    envelope.recipientThreadId === event.payload.threadId &&
+                    envelope.delivery === "pending"
+                      ? { ...envelope, delivery: "cancelled" as const }
+                      : envelope,
+                  ),
+                  channels: mailbox.channels.map((channel) => ({
+                    ...channel,
+                    members: channel.members.filter((id) => id !== event.payload.threadId),
+                  })),
+                };
+                yield* sql`UPDATE projection_coordination_mailboxes SET revision = ${next.revision}, document_json = ${JSON.stringify(next)} WHERE root_thread_id = ${rootId}`.pipe(
+                  Effect.mapError(toPersistenceSqlError("coordination recipient deletion")),
+                );
+              }
+            }
+            return;
+          }
+          if (event.type === "coordination.mailbox.updated") {
+            const mailbox = event.payload.mailbox;
+            yield* sql`INSERT INTO projection_coordination_mailboxes (root_thread_id, revision, document_json)
+              VALUES (${mailbox.rootThreadId}, ${mailbox.revision}, ${JSON.stringify(mailbox)})
+              ON CONFLICT(root_thread_id) DO UPDATE SET revision = excluded.revision, document_json = excluded.document_json
+              WHERE excluded.revision > projection_coordination_mailboxes.revision`.pipe(
+              Effect.mapError(toPersistenceSqlError("coordination mailbox projection")),
+            );
+            return;
+          }
+          if (event.type !== "coordination.plan.updated") return;
+          const plan = event.payload.plan;
+          yield* sql`INSERT INTO projection_coordination_plans (plan_id, root_thread_id, revision, document_json)
+            VALUES (${plan.id}, ${plan.rootThreadId}, ${plan.revision}, ${JSON.stringify(plan)})
+            ON CONFLICT(plan_id) DO UPDATE SET revision = excluded.revision, document_json = excluded.document_json
+            WHERE excluded.revision > projection_coordination_plans.revision`.pipe(
+            Effect.mapError(toPersistenceSqlError("coordination projection")),
+          );
+        }),
+      },
       {
         name: ORCHESTRATION_PROJECTOR_NAMES.projects,
         apply: applyProjectsProjection,

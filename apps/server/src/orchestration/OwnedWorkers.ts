@@ -1,6 +1,7 @@
 import {
   type ThreadUnattendedAuthority,
   isWorkerRuntimeModeAllowed,
+  CoordinationError,
   ThreadId,
   WorkerOperationError,
   WorkerSpawnInput,
@@ -168,19 +169,21 @@ const make = Effect.gen(function* () {
       Effect.mapError((cause) =>
         isWorkerOperationError(cause)
           ? cause
-          : isCommandConflict(cause)
-            ? new WorkerOperationError({
-                operation,
-                code: "conflict",
-                detail: "Worker command ID has already been used or rejected.",
-                cause,
-              })
-            : new WorkerOperationError({
-                operation,
-                code: "internal",
-                detail: "Worker operation failed.",
-                cause,
-              }),
+          : Schema.is(CoordinationError)(cause) && cause.code === "busy"
+            ? failure(operation, "busy", cause.detail)
+            : isCommandConflict(cause)
+              ? new WorkerOperationError({
+                  operation,
+                  code: "conflict",
+                  detail: "Worker command ID has already been used or rejected.",
+                  cause,
+                })
+              : new WorkerOperationError({
+                  operation,
+                  code: "internal",
+                  detail: "Worker operation failed.",
+                  cause,
+                }),
       ),
     );
   const read = Effect.fnUntraced(function* (operation: Operation, threadId: ThreadId) {

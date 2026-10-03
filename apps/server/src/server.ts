@@ -162,6 +162,7 @@ import * as UsageLimitSources from "./usage/UsageLimitSources.ts";
 import * as UsageService from "./usage/UsageService.ts";
 import { OrchestrationLayerLive } from "./orchestration/runtimeLayer.ts";
 import * as OwnedWorkers from "./orchestration/OwnedWorkers.ts";
+import * as SharedWorkspaceActivity from "./workspace/SharedWorkspaceActivity.ts";
 import * as UnattendedGrants from "./orchestration/UnattendedGrants.ts";
 import * as ProjectionSnapshotQuery from "./orchestration/Services/ProjectionSnapshotQuery.ts";
 import {
@@ -474,7 +475,7 @@ const ProviderRuntimeLayerLive = ProviderSessionReaperLive.pipe(
   Layer.provideMerge(ProviderUsageLimitsIngestionLive),
   Layer.provideMerge(UnattendedGrants.layer),
   Layer.provideMerge(OwnedWorkers.layer),
-  Layer.provideMerge(ProviderLayerLive),
+  Layer.provideMerge(ProviderLayerLive.pipe(Layer.provideMerge(SharedWorkspaceActivity.layer))),
   Layer.provideMerge(WorkspaceLayerLive),
   Layer.provideMerge(OrchestrationLayerLive),
 );

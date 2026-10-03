@@ -33,6 +33,7 @@ import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
 
 import * as ServerConfig from "./config.ts";
+import * as CoordinationReactor from "./orchestration/CoordinationReactor.ts";
 import { flushCompileCache } from "./compileCache.ts";
 import * as Keybindings from "./keybindings.ts";
 import * as ExternalLauncher from "./process/externalLauncher.ts";
@@ -959,6 +960,7 @@ export const make = (options?: StartupOptions) =>
     const serverEnvironment = yield* ServerEnvironment.ServerEnvironment;
     const projectionSnapshotQuery = yield* ProjectionSnapshotQuery.ProjectionSnapshotQuery;
     const providerSessionDirectory = yield* ProviderSessionDirectory.ProviderSessionDirectory;
+    const coordinationReactor = yield* CoordinationReactor.CoordinationReactor;
     const crypto = yield* Crypto.Crypto;
     const launcher = yield* ServiceLauncherClient.ServiceLauncherClient;
 
@@ -1021,6 +1023,11 @@ export const make = (options?: StartupOptions) =>
 
       yield* runStartupPhase("workers.pending-starts.reconcile", reconcileWorkerPendingStarts);
       yield* runStartupPhase("provider-sessions.reconcile", reconcileProviderSessions);
+      yield* runStartupPhase("coordination.recover", coordinationReactor.recover);
+      yield* runStartupPhase(
+        "coordination.start",
+        coordinationReactor.start.pipe(Scope.provide(reactorScope)),
+      );
       yield* runStartupPhase("worktree-setups.reconcile", reconcileWorktreeSetups);
 
       yield* Effect.logDebug("startup phase: syncing clean projects");
