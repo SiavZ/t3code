@@ -13,6 +13,10 @@ export const OPTIONAL_AGENT_TOOL_DETAILS: Record<
   { label: string; description: string }
 > = {
   memory: { label: "Memory", description: "Save, search and recall durable memories." },
+  "quality-records": {
+    label: "Quality records",
+    description: "Record task progress and verification evidence.",
+  },
 };
 
 /** Change one flag using each target's effective value, never a representative's array. */

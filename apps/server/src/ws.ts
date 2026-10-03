@@ -110,6 +110,7 @@ import * as OrchestrationEngine from "./orchestration/Services/OrchestrationEngi
 import * as OwnedWorkers from "./orchestration/OwnedWorkers.ts";
 import * as GlobalMemory from "./memory/GlobalMemory.ts";
 import * as Memory from "./memory/Memory.ts";
+import * as QualityRecords from "./orchestration/QualityRecords.ts";
 import * as UnattendedGrants from "./orchestration/UnattendedGrants.ts";
 import * as CoordinationPlans from "./orchestration/CoordinationPlans.ts";
 import * as ProjectionSnapshotQuery from "./orchestration/Services/ProjectionSnapshotQuery.ts";
@@ -537,9 +538,12 @@ const makeParityToolsRpcLayer = () =>
   ParityToolsRpcGroup.toLayer(
     Effect.gen(function* () {
       const memory = yield* Memory.MemoryService;
+      const qualityRecords = yield* QualityRecords.QualityRecords;
       const unattendedGrants = yield* UnattendedGrants.UnattendedGrants;
       const coordinationPlans = yield* CoordinationPlans.CoordinationPlans;
       return ParityToolsRpcGroup.of({
+        [WS_METHODS.qualitySubscribeChanges]: (input) =>
+          qualityRecords.subscribe(input, { threadId: input.threadId, source: "user-reported" }),
         [WS_METHODS.unattendedGrantCreate]: (input) =>
           unattendedGrants.create(input, { source: "client" }),
         [WS_METHODS.unattendedGrantList]: (input) => unattendedGrants.list(input),
@@ -559,6 +563,10 @@ const makeParityToolsRpcLayer = () =>
           memory.link(input, { projectId, allowGlobal: false }),
         [WS_METHODS.memoryRelated]: ({ projectId, input }) =>
           memory.related(input, { projectId, allowGlobal: false }),
+        [WS_METHODS.qualityRead]: (input) =>
+          qualityRecords.get(input, { threadId: input.threadId, source: "user-reported" }),
+        [WS_METHODS.qualityUpdate]: (input) =>
+          qualityRecords.update(input, { threadId: input.threadId, source: "user-reported" }),
         [WS_METHODS.coordinationMailboxRead]: (input) => coordinationPlans.mailboxRead(input),
         [WS_METHODS.coordinationMailboxWrite]: (input) => coordinationPlans.mailboxWrite(input),
         [WS_METHODS.coordinationRead]: (input) => coordinationPlans.read(input),
@@ -4204,6 +4212,7 @@ export const websocketRpcRouteLayer = Layer.unwrap(
     const ownedWorkers = yield* OwnedWorkers.OwnedWorkers;
     const globalMemory = yield* GlobalMemory.GlobalMemory;
     const memory = yield* Memory.MemoryService;
+    const qualityRecords = yield* QualityRecords.QualityRecords;
     const unattendedGrants = yield* UnattendedGrants.UnattendedGrants;
     const coordinationPlans = yield* CoordinationPlans.CoordinationPlans;
     const sql = yield* SqlClient.SqlClient;
@@ -4252,6 +4261,7 @@ export const websocketRpcRouteLayer = Layer.unwrap(
                 Layer.provide(Layer.succeed(PullRequestService.PullRequestService, pullRequests)),
                 Layer.provide(Layer.succeed(OwnedWorkers.OwnedWorkers, ownedWorkers)),
                 Layer.provide(Layer.succeed(Memory.MemoryService, memory)),
+                Layer.provide(Layer.succeed(QualityRecords.QualityRecords, qualityRecords)),
                 Layer.provide(Layer.succeed(UnattendedGrants.UnattendedGrants, unattendedGrants)),
               )
               .pipe(

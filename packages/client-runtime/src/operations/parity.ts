@@ -1,5 +1,10 @@
 import { WS_METHODS } from "@t3tools/contracts";
-import { request, type EnvironmentRpcInput, type EnvironmentUnaryRpcTag } from "../rpc/client.ts";
+import {
+  request,
+  subscribe,
+  type EnvironmentRpcInput,
+  type EnvironmentUnaryRpcTag,
+} from "../rpc/client.ts";
 
 const unary =
   <Tag extends EnvironmentUnaryRpcTag>(tag: Tag) =>
@@ -26,6 +31,12 @@ export const parityOperations = {
     tag: unary(WS_METHODS.memoryTag),
     link: unary(WS_METHODS.memoryLink),
     related: unary(WS_METHODS.memoryRelated),
+  },
+  quality: {
+    read: unary(WS_METHODS.qualityRead),
+    update: unary(WS_METHODS.qualityUpdate),
+    subscribeChanges: (input: EnvironmentRpcInput<typeof WS_METHODS.qualitySubscribeChanges>) =>
+      subscribe(WS_METHODS.qualitySubscribeChanges, input),
   },
   unattendedGrants: {
     create: unary(WS_METHODS.unattendedGrantCreate),

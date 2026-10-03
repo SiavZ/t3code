@@ -32,6 +32,7 @@ import {
 import * as EnvironmentSupervisor from "../connection/supervisor.ts";
 import * as RpcSession from "../rpc/session.ts";
 import type { WsRpcProtocolClient } from "../rpc/protocol.ts";
+import { parityOperations } from "../operations/parity.ts";
 import {
   EnvironmentRpcRequestObserver,
   request,
@@ -91,6 +92,37 @@ const makeHarness = Effect.fn("TestEnvironmentRpc.makeHarness")(function* () {
 });
 
 describe("environment RPC", () => {
+  it.effect("refreshes quality revision metadata from the replacement environment session", () =>
+    Effect.gen(function* () {
+      const firstSeen = yield* Deferred.make<void>();
+      const resumed = yield* Deferred.make<void>();
+      const revisions: number[] = [];
+      const threadId = ThreadId.make("quality-thread");
+      const { activeSession, supervisor } = yield* makeHarness();
+      const clientAt = (revision: number) =>
+        ({
+          [WS_METHODS.qualitySubscribeChanges]: () =>
+            Stream.succeed({ threadId, revision }).pipe(Stream.concat(Stream.never)),
+        }) as unknown as WsRpcProtocolClient;
+      yield* SubscriptionRef.set(activeSession, Option.some(session(clientAt(3))));
+      const consumer = yield* parityOperations.quality.subscribeChanges({ threadId }).pipe(
+        Stream.runForEach(({ revision }) => {
+          revisions.push(revision);
+          return revision === 3
+            ? Deferred.succeed(firstSeen, undefined)
+            : Deferred.succeed(resumed, undefined);
+        }),
+        Effect.provideService(EnvironmentSupervisor.EnvironmentSupervisor, supervisor),
+        Effect.forkChild,
+      );
+      yield* Deferred.await(firstSeen);
+      yield* SubscriptionRef.set(activeSession, Option.some(session(clientAt(9))));
+      yield* Deferred.await(resumed);
+      expect(revisions).toEqual([3, 9]);
+      yield* Fiber.interrupt(consumer);
+    }),
+  );
+
   it.effect("registers a fresh preview host after completion without replaying requests", () =>
     Effect.gen(function* () {
       const firstCompleted = yield* Deferred.make<void>();

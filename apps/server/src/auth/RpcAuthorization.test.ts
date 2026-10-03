@@ -23,6 +23,8 @@ describe("RPC authorization scopes", () => {
       WS_METHODS.memoryRecall,
       WS_METHODS.memorySearch,
       WS_METHODS.memoryRelated,
+      WS_METHODS.qualityRead,
+      WS_METHODS.qualitySubscribeChanges,
     ])
       expect(requiredScopeForRpcMethod(method)).toBe(AuthOrchestrationReadScope);
     for (const method of [
@@ -30,6 +32,7 @@ describe("RPC authorization scopes", () => {
       WS_METHODS.coordinationMailboxWrite,
       WS_METHODS.memoryRemember,
       WS_METHODS.memoryForget,
+      WS_METHODS.qualityUpdate,
     ])
       expect(requiredScopeForRpcMethod(method)).toBe(AuthOrchestrationOperateScope);
   });

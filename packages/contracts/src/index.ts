@@ -31,6 +31,7 @@ export * from "./orchestration.ts";
 export * from "./workers.ts";
 export * from "./coordination.ts";
 export * from "./memory.ts";
+export * from "./qualityRecords.ts";
 export * from "./scheduledWork.ts";
 export * from "./unattendedGrants.ts";
 export * from "./t3ProjectFile.ts";

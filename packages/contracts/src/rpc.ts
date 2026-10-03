@@ -10,6 +10,7 @@ import * as Rpc from "effect/unstable/rpc/Rpc";
 import * as RpcGroup from "effect/unstable/rpc/RpcGroup";
 import * as Coordination from "./coordination.ts";
 import * as Memory from "./memory.ts";
+import * as Quality from "./qualityRecords.ts";
 import * as Scheduled from "./scheduledWork.ts";
 import * as Grants from "./unattendedGrants.ts";
 import { ProjectId } from "./baseSchemas.ts";
@@ -307,6 +308,7 @@ import { VcsError } from "./vcs.ts";
 export const WS_METHODS = {
   memoryGlobalRead: "memoryGlobal.read",
   memoryGlobalWrite: "memoryGlobal.write",
+  qualitySubscribeChanges: "quality.subscribeChanges",
   unattendedGrantCreate: "unattendedGrants.create",
   unattendedGrantList: "unattendedGrants.list",
   unattendedGrantRevoke: "unattendedGrants.revoke",
@@ -317,6 +319,8 @@ export const WS_METHODS = {
   memoryTag: "memory.tag",
   memoryLink: "memory.link",
   memoryRelated: "memory.related",
+  qualityRead: "quality.read",
+  qualityUpdate: "quality.update",
   coordinationMailboxRead: "coordination.mailboxRead",
   coordinationMailboxWrite: "coordination.mailboxWrite",
   coordinationRead: "coordination.read",
@@ -1547,6 +1551,12 @@ export const ParityToolsRpcGroup = RpcGroup.make(
     success: Coordination.CoordinationMailbox,
     error: Schema.Union([Coordination.CoordinationError, EnvironmentAuthorizationError]),
   }),
+  Rpc.make(WS_METHODS.qualitySubscribeChanges, {
+    payload: Quality.QualityReadInput,
+    success: Quality.QualityRecordChange,
+    stream: true,
+    error: Schema.Union([Quality.QualityRecordsError, EnvironmentAuthorizationError]),
+  }),
   Rpc.make(WS_METHODS.unattendedGrantCreate, {
     payload: Grants.UnattendedGrantCreateInput,
     success: Grants.UnattendedGrant,
@@ -1596,6 +1606,16 @@ export const ParityToolsRpcGroup = RpcGroup.make(
     payload: Schema.Struct({ projectId: ProjectId, input: Memory.MemoryRelatedInput }),
     success: Memory.MemoryResult,
     error: Schema.Union([Memory.MemoryError, EnvironmentAuthorizationError]),
+  }),
+  Rpc.make(WS_METHODS.qualityRead, {
+    payload: Quality.QualityReadInput,
+    success: Schema.NullOr(Quality.QualityRecord),
+    error: Schema.Union([Quality.QualityRecordsError, EnvironmentAuthorizationError]),
+  }),
+  Rpc.make(WS_METHODS.qualityUpdate, {
+    payload: Quality.QualityUpdateInput,
+    success: Quality.QualityRecord,
+    error: Schema.Union([Quality.QualityRecordsError, EnvironmentAuthorizationError]),
   }),
   Rpc.make(WS_METHODS.coordinationRead, {
     payload: Coordination.CoordinationReadInput,

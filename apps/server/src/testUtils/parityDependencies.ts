@@ -7,6 +7,7 @@ import * as CoordinationReactor from "../orchestration/CoordinationReactor.ts";
 import * as WorkspacePaths from "../workspace/WorkspacePaths.ts";
 import * as Memory from "../memory/Memory.ts";
 import * as GlobalMemory from "../memory/GlobalMemory.ts";
+import * as QualityRecords from "../orchestration/QualityRecords.ts";
 import * as ProcessRunner from "../processRunner.ts";
 import { OrchestrationCommandReceiptRepositoryLive } from "../persistence/Layers/OrchestrationCommandReceipts.ts";
 
@@ -21,6 +22,7 @@ export const parityDependenciesLayer = UnattendedGrants.layer.pipe(
       CoordinationPlans.layer.pipe(Layer.provide(CoordinationPlanStore.layer)),
       CoordinationReactor.layer,
       Memory.layer,
+      QualityRecords.layer,
     ),
   ),
   Layer.provide(WorkspacePaths.layer),

@@ -6,12 +6,14 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 import * as NodeSqliteClient from "@t3tools/shared/nodeSqliteClient";
-import { ProjectId } from "@t3tools/contracts";
+import { ProjectId, ThreadId } from "@t3tools/contracts";
 import migrateMemory from "../persistence/Migrations/058_Memory.ts";
+import migrateQuality from "../persistence/Migrations/059_QualityRecords.ts";
 import * as Memory from "./Memory.ts";
+import * as Quality from "../orchestration/QualityRecords.ts";
 
 it.effect(
-  "memory survives closing and reopening a real SQLite database without retaining forgotten bodies",
+  "memory and quality survive closing and reopening a real SQLite database without retaining forgotten bodies",
   () =>
     Effect.gen(function* () {
       const directory = yield* Effect.acquireRelease(
@@ -20,11 +22,17 @@ it.effect(
       );
       const filename = NodePath.join(directory, "state.sqlite");
       const services = () =>
-        Memory.layer.pipe(Layer.provideMerge(NodeSqliteClient.layer({ filename })));
+        Layer.merge(Memory.layer, Quality.layer).pipe(
+          Layer.provideMerge(NodeSqliteClient.layer({ filename })),
+        );
       const authority = { projectId: ProjectId.make("persistent-project"), allowGlobal: false };
+      const threadId = ThreadId.make("persistent-thread");
+      const qualityAuthority = { threadId, source: "agent-reported" as const };
       yield* Effect.gen(function* () {
         yield* migrateMemory;
+        yield* migrateQuality;
         const memory = yield* Memory.MemoryService;
+        const quality = yield* Quality.QualityRecords;
         yield* memory.remember(
           {
             id: "persistent",
@@ -36,12 +44,27 @@ it.effect(
           },
           authority,
         );
+        yield* quality.update(
+          {
+            threadId,
+            operationId: "quality",
+            expectedRevision: 0,
+            intention: "Durable quality",
+            todos: [],
+          },
+          qualityAuthority,
+        );
       }).pipe(Effect.provide(services()), Effect.scoped);
       yield* Effect.gen(function* () {
         const memory = yield* Memory.MemoryService;
+        const quality = yield* Quality.QualityRecords;
         assert.equal(
           (yield* memory.recall({ query: "focused" }, authority)).entries[0]?.content,
           "Keep tests focused",
+        );
+        assert.equal(
+          (yield* quality.get({ threadId }, qualityAuthority))?.intention,
+          "Durable quality",
         );
         yield* memory.forget(
           { id: "persistent", operationId: "forget", expectedRevision: 1 },

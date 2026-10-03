@@ -139,7 +139,7 @@ export const RuntimeMode = Schema.Literals([
 ]);
 export type RuntimeMode = typeof RuntimeMode.Type;
 export const DEFAULT_RUNTIME_MODE: RuntimeMode = "full-access";
-export const OPTIONAL_AGENT_TOOL_CAPABILITIES = ["memory"] as const;
+export const OPTIONAL_AGENT_TOOL_CAPABILITIES = ["memory", "quality-records"] as const;
 export const OptionalAgentToolCapability = Schema.Literals(OPTIONAL_AGENT_TOOL_CAPABILITIES);
 export type OptionalAgentToolCapability = typeof OptionalAgentToolCapability.Type;
 export const WorkerMcpCapability = Schema.Literals([

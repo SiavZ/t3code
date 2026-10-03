@@ -6,13 +6,16 @@ import {
 } from "./agentToolSettings.ts";
 
 describe("optional agent tool settings", () => {
-  it("returns a new target array without mutating the input", () => {
-    const enabled = ["memory"] as const;
-    const disabled = [] as const;
-    expect(setOptionalAgentToolCapability(enabled, "memory", false)).toEqual([]);
-    expect(setOptionalAgentToolCapability(disabled, "memory", true)).toEqual(["memory"]);
-    expect(enabled).toEqual(["memory"]);
-    expect(disabled).toEqual([]);
+  it("preserves each target's unrelated flags when enabling or disabling one tool", () => {
+    const first = ["quality-records", "memory"] as const;
+    const second = ["quality-records"] as const;
+    expect(setOptionalAgentToolCapability(first, "memory", false)).toEqual(["quality-records"]);
+    expect(setOptionalAgentToolCapability(second, "memory", true)).toEqual([
+      "memory",
+      "quality-records",
+    ]);
+    expect(first).toEqual(["quality-records", "memory"]);
+    expect(second).toEqual(["quality-records"]);
   });
   it("is idempotent, deduplicated and bounded by the capability catalog", () => {
     expect(setOptionalAgentToolCapability(["memory", "memory"], "memory", true)).toEqual([
@@ -20,7 +23,7 @@ describe("optional agent tool settings", () => {
     ]);
     expect(
       setOptionalAgentToolCapability(OPTIONAL_AGENT_TOOL_CAPABILITIES, "memory", true),
-    ).toHaveLength(1);
+    ).toHaveLength(2);
     expect(setOptionalAgentToolCapability([], "memory", false)).toEqual([]);
   });
   it("disabling any capability never broadens access", () => {
@@ -30,20 +33,26 @@ describe("optional agent tool settings", () => {
         capability,
         false,
       );
-      expect(narrowed).toHaveLength(0);
+      expect(narrowed).toHaveLength(1);
       expect(narrowed).not.toContain(capability);
+      expect(narrowed.every((entry) => OPTIONAL_AGENT_TOOL_CAPABILITIES.includes(entry))).toBe(
+        true,
+      );
     }
   });
-  it("reports a shared value only when every target agrees", () => {
+  it("compares the selected flag rather than entire capability arrays", () => {
     expect(
       optionalAgentToolCapabilityValue(
-        [{ agentToolCapabilities: ["memory"] }, { agentToolCapabilities: ["memory"] }],
+        [
+          { agentToolCapabilities: ["memory", "quality-records"] },
+          { agentToolCapabilities: ["memory"] },
+        ],
         "memory",
       ),
     ).toBe(true);
     expect(
       optionalAgentToolCapabilityValue(
-        [{ agentToolCapabilities: [] }, { agentToolCapabilities: [] }],
+        [{ agentToolCapabilities: ["quality-records"] }, { agentToolCapabilities: [] }],
         "memory",
       ),
     ).toBe(false);
