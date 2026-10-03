@@ -39,6 +39,7 @@ import * as CoordinationReactor from "./orchestration/CoordinationReactor.ts";
 import * as ScheduledWork from "./orchestration/ScheduledWork.ts";
 import * as AmbientWork from "./orchestration/AmbientWork.ts";
 import * as BackgroundJobs from "./background/BackgroundJobs.ts";
+import * as RuntimeHookObservers from "./provider/RuntimeHookObservers.ts";
 import { flushCompileCache } from "./compileCache.ts";
 import * as Keybindings from "./keybindings.ts";
 import * as ExternalLauncher from "./process/externalLauncher.ts";
@@ -965,6 +966,7 @@ export const make = (options?: StartupOptions) =>
     const serverEnvironment = yield* ServerEnvironment.ServerEnvironment;
     const projectionSnapshotQuery = yield* ProjectionSnapshotQuery.ProjectionSnapshotQuery;
     const providerSessionDirectory = yield* ProviderSessionDirectory.ProviderSessionDirectory;
+    const runtimeHookObservers = yield* RuntimeHookObservers.RuntimeHookObservers;
     const coordinationReactor = yield* CoordinationReactor.CoordinationReactor;
     const agentDocuments = yield* AgentDocuments.AgentDocuments;
     const threadRuntime = yield* ThreadRuntimeService.ThreadRuntimeService;
@@ -1050,6 +1052,7 @@ export const make = (options?: StartupOptions) =>
         "coordination.start",
         coordinationReactor.start.pipe(Scope.provide(reactorScope)),
       );
+      yield* runStartupPhase("runtime-hooks.start", runtimeHookObservers.start());
       yield* runStartupPhase("worktree-setups.reconcile", reconcileWorktreeSetups);
 
       yield* Effect.logDebug("startup phase: syncing clean projects");

@@ -41,6 +41,7 @@ export * from "./historySearch.ts";
 export * from "./externalMcp.ts";
 export * from "./skillManagement.ts";
 export * from "./runtimeOperations.ts";
+export * from "./runtimeHooks.ts";
 export * from "./integrationWorkflows.ts";
 export * from "./desktopAutomation.ts";
 export * from "./t3ProjectFile.ts";

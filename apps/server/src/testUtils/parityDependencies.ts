@@ -22,6 +22,8 @@ import * as AgentDocuments from "../orchestration/AgentDocuments.ts";
 import * as DocumentLifecycle from "../orchestration/DocumentLifecycle.ts";
 import * as AgentDocumentAssets from "../orchestration/AgentDocumentAssets.ts";
 import * as ThreadRuntimeService from "../orchestration/ThreadRuntimeService.ts";
+import * as RuntimeHooks from "../provider/RuntimeHooks.ts";
+import * as RuntimeHookObservers from "../provider/RuntimeHookObservers.ts";
 import * as ProcessRunner from "../processRunner.ts";
 import * as IntegrationConfiguration from "../integrations/IntegrationConfiguration.ts";
 import * as PreviewAutomationBroker from "../mcp/PreviewAutomationBroker.ts";
@@ -32,6 +34,7 @@ import { OrchestrationCommandReceiptRepositoryLive } from "../persistence/Layers
 export const parityStartupDependenciesLayer = Layer.mergeAll(
   AmbientWork.layer,
   BackgroundJobs.layer.pipe(Layer.provide(BackgroundJobAuthority.layer)),
+  RuntimeHookObservers.layer.pipe(Layer.provideMerge(RuntimeHooks.layer)),
   DocumentLifecycle.layer,
   ThreadRuntimeService.layer,
 ).pipe(

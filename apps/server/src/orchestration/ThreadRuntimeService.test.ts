@@ -22,6 +22,11 @@ import * as HistorySearch from "../project/HistorySearch.ts";
 import * as Scanner from "../project/AgentSessionScanner.ts";
 import { importNormalizedHistory } from "../project/AgentSessionImporter.ts";
 import { ServerSettingsService } from "../serverSettings.ts";
+import * as Hooks from "../provider/RuntimeHooks.ts";
+import * as Observers from "../provider/RuntimeHookObservers.ts";
+import * as ProcessRunner from "../processRunner.ts";
+import * as Deferred from "effect/Deferred";
+import * as ChildProcessSpawner from "effect/unstable/process/ChildProcessSpawner";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 import * as NodeCrypto from "node:crypto";
 const base = Layer.mergeAll(
@@ -51,6 +56,142 @@ const projectId = ProjectId.make("runtime-project");
 const threadId = ThreadId.make("runtime-thread");
 const instanceId = ProviderInstanceId.make("codex");
 describe("ThreadRuntimeService real engine/SQLite", () => {
+  it.effect(
+    "observes committed session transitions once and sends metadata rather than conversation text",
+    () => {
+      const ended = Deferred.makeUnsafe<void>();
+      const turnEnded = Deferred.makeUnsafe<void>();
+      const calls: ProcessRunner.ProcessRunInput[] = [];
+      const runner = Layer.succeed(ProcessRunner.ProcessRunner, {
+        run: (input) =>
+          Effect.gen(function* () {
+            calls.push(input);
+            if (input.command === "end") yield* Deferred.succeed(ended, undefined);
+            if (input.command === "turn-end") yield* Deferred.succeed(turnEnded, undefined);
+            return {
+              stdout: "",
+              stderr: "",
+              code: ChildProcessSpawner.ExitCode(0),
+              timedOut: false,
+              stdoutTruncated: false,
+              stderrTruncated: false,
+              stdoutInvalidUtf8: false,
+              stderrInvalidUtf8: false,
+            };
+          }),
+      });
+      const observerLayer = Observers.layer.pipe(
+        Layer.provideMerge(Hooks.layer),
+        Layer.provide(runner),
+        Layer.provideMerge(base),
+      );
+      return Effect.gen(function* () {
+        const engine = yield* Engine.OrchestrationEngineService;
+        const hooks = yield* Hooks.RuntimeHooks;
+        const observer = yield* Observers.RuntimeHookObservers;
+        yield* engine.dispatch({
+          type: "project.create",
+          commandId: CommandId.make("observer-project"),
+          projectId,
+          title: "Observer",
+          workspaceRoot: process.cwd(),
+          createdAt: at,
+        });
+        yield* engine.dispatch({
+          type: "thread.create",
+          commandId: CommandId.make("observer-thread"),
+          threadId,
+          projectId,
+          title: "Private conversation",
+          modelSelection: { instanceId, model: "model" },
+          runtimeMode: "full-access",
+          interactionMode: "default",
+          branch: null,
+          worktreePath: null,
+          createdAt: at,
+        });
+        const config = {
+          projectId,
+          enabled: true,
+          args: [],
+          timeoutMs: 1000,
+          failurePolicy: "open" as const,
+          coverage: "host-tools" as const,
+        };
+        yield* hooks.configure(
+          { ...config, id: "start", command: "start", event: "session.start" },
+          { projectId, trustedOperator: true },
+        );
+        yield* hooks.configure(
+          { ...config, id: "end", command: "end", event: "session.end" },
+          { projectId, trustedOperator: true },
+        );
+        yield* hooks.configure(
+          { ...config, id: "turn-start", command: "turn-start", event: "turn.start" },
+          { projectId, trustedOperator: true },
+        );
+        yield* hooks.configure(
+          { ...config, id: "turn-end", command: "turn-end", event: "turn.end" },
+          { projectId, trustedOperator: true },
+        );
+        yield* observer.start();
+        yield* engine.dispatch({
+          type: "thread.turn.start",
+          commandId: CommandId.make("observer-turn"),
+          threadId,
+          message: {
+            messageId: MessageId.make("observer-message"),
+            role: "user",
+            text: "Private user request",
+            attachments: [],
+          },
+          runtimeMode: "full-access",
+          interactionMode: "default",
+          createdAt: at,
+        });
+        const session = {
+          threadId,
+          status: "ready" as const,
+          providerName: "codex" as const,
+          providerInstanceId: instanceId,
+          runtimeMode: "full-access" as const,
+          activeTurnId: null,
+          lastError: null,
+          updatedAt: at,
+        };
+        yield* engine.dispatch({
+          type: "thread.session.set",
+          commandId: CommandId.make("ready-one"),
+          threadId,
+          session,
+          createdAt: at,
+        });
+        yield* engine.dispatch({
+          type: "thread.session.set",
+          commandId: CommandId.make("ready-two"),
+          threadId,
+          session,
+          createdAt: at,
+        });
+        yield* engine.dispatch({
+          type: "thread.session.set",
+          commandId: CommandId.make("stopped"),
+          threadId,
+          session: { ...session, status: "stopped" },
+          createdAt: at,
+        });
+        yield* Deferred.await(ended);
+        yield* Deferred.await(turnEnded);
+        expect(calls.map((call) => call.command)).toEqual([
+          "turn-start",
+          "start",
+          "end",
+          "turn-end",
+        ]);
+        expect(calls.every((call) => !call.stdin?.includes("Private conversation"))).toBe(true);
+      }).pipe(Effect.provide(observerLayer));
+    },
+  );
   it.effect(
     "imports normalized history-only through the real T3 reader without native runtime bindings",
     () =>

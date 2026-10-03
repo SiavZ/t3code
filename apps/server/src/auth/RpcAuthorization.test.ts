@@ -70,6 +70,8 @@ describe("RPC authorization scopes", () => {
       WS_METHODS.ambientConfigure,
       WS_METHODS.externalMcpConfigure,
       WS_METHODS.externalMcpRemove,
+      WS_METHODS.runtimeHooksConfigure,
+      WS_METHODS.runtimeHooksRemove,
       WS_METHODS.integrationApprovalGrant,
       WS_METHODS.gmailBeginConnect,
       WS_METHODS.gmailCompleteConnect,

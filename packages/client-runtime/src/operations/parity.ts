@@ -102,6 +102,11 @@ export const parityOperations = {
     handoff: unary(WS_METHODS.runtimeHandoff),
     fork: unary(WS_METHODS.runtimeFork),
   },
+  runtimeHooks: {
+    list: unary(WS_METHODS.runtimeHooksList),
+    configure: unary(WS_METHODS.runtimeHooksConfigure),
+    remove: unary(WS_METHODS.runtimeHooksRemove),
+  },
   integrations: {
     approvalGrant: unary(WS_METHODS.integrationApprovalGrant),
   },

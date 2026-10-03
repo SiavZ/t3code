@@ -113,6 +113,7 @@ import * as AgentDocuments from "./orchestration/AgentDocuments.ts";
 import * as AgentDocumentAssets from "./orchestration/AgentDocumentAssets.ts";
 import * as AmbientWork from "./orchestration/AmbientWork.ts";
 import * as ThreadRuntimeService from "./orchestration/ThreadRuntimeService.ts";
+import * as RuntimeHooks from "./provider/RuntimeHooks.ts";
 import * as DesktopAutomationBroker from "./integrations/DesktopAutomationBroker.ts";
 import * as BrowserTaskService from "./integrations/BrowserTaskService.ts";
 import * as WorkflowApprovals from "./integrations/WorkflowApprovals.ts";
@@ -623,6 +624,7 @@ const makeParityToolsRpcLayer = () =>
       const documentAssets = yield* AgentDocumentAssets.AgentDocumentAssets;
       const ambientWork = yield* AmbientWork.AmbientWork;
       const threadRuntime = yield* ThreadRuntimeService.ThreadRuntimeService;
+      const runtimeHooks = yield* RuntimeHooks.RuntimeHooks;
       const memory = yield* Memory.MemoryService;
       const qualityRecords = yield* QualityRecords.QualityRecords;
       const scheduledWork = yield* ScheduledWork.ScheduledWork;
@@ -636,6 +638,12 @@ const makeParityToolsRpcLayer = () =>
       return ParityToolsRpcGroup.of({
         [WS_METHODS.runtimeHandoff]: (input) => threadRuntime.handoff(input),
         [WS_METHODS.runtimeFork]: (input) => threadRuntime.fork(input),
+        [WS_METHODS.runtimeHooksList]: (input) =>
+          runtimeHooks.list({ projectId: input.projectId, trustedOperator: true }),
+        [WS_METHODS.runtimeHooksConfigure]: (input) =>
+          runtimeHooks.configure(input, { projectId: input.projectId, trustedOperator: true }),
+        [WS_METHODS.runtimeHooksRemove]: (input) =>
+          runtimeHooks.remove(input.id, { projectId: input.projectId, trustedOperator: true }),
         [WS_METHODS.qualitySubscribeChanges]: (input) =>
           qualityRecords.subscribe(input, { threadId: input.threadId, source: "user-reported" }),
         [WS_METHODS.agentDocumentsPrepareAsset]: (input) => documentAssets.prepare(input),
@@ -4357,6 +4365,7 @@ export const websocketRpcRouteLayer = Layer.unwrap(
     const documentAssets = yield* AgentDocumentAssets.AgentDocumentAssets;
     const ambientWork = yield* AmbientWork.AmbientWork;
     const threadRuntime = yield* ThreadRuntimeService.ThreadRuntimeService;
+    const runtimeHooks = yield* RuntimeHooks.RuntimeHooks;
     const workflowApprovals = yield* WorkflowApprovals.WorkflowApprovals;
     const integrationCatalog = yield* IntegrationCatalog.IntegrationCatalog;
     const gmail = yield* GmailService.GmailService;
@@ -4426,7 +4435,10 @@ export const websocketRpcRouteLayer = Layer.unwrap(
                 ),
                 Layer.provide(Layer.succeed(AmbientWork.AmbientWork, ambientWork)),
                 Layer.provide(
-                  Layer.succeed(ThreadRuntimeService.ThreadRuntimeService, threadRuntime),
+                  Layer.mergeAll(
+                    Layer.succeed(ThreadRuntimeService.ThreadRuntimeService, threadRuntime),
+                    Layer.succeed(RuntimeHooks.RuntimeHooks, runtimeHooks),
+                  ),
                 ),
                 Layer.provide(Layer.succeed(Memory.MemoryService, memory)),
                 Layer.provide(Layer.succeed(QualityRecords.QualityRecords, qualityRecords)),

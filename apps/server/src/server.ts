@@ -168,7 +168,9 @@ import * as AgentDocuments from "./orchestration/AgentDocuments.ts";
 import * as DocumentLifecycle from "./orchestration/DocumentLifecycle.ts";
 import * as AgentDocumentAssets from "./orchestration/AgentDocumentAssets.ts";
 import * as ThreadRuntimeService from "./orchestration/ThreadRuntimeService.ts";
+import * as RuntimeHooks from "./provider/RuntimeHooks.ts";
 import * as IntegrationConfiguration from "./integrations/IntegrationConfiguration.ts";
+import * as RuntimeHookObservers from "./provider/RuntimeHookObservers.ts";
 import * as SharedWorkspaceActivity from "./workspace/SharedWorkspaceActivity.ts";
 import * as ExternalHistoryReaders from "./project/ExternalHistoryReaders.ts";
 import * as AgentSessionScanner from "./project/AgentSessionScanner.ts";
@@ -516,6 +518,7 @@ const ProviderRuntimeLayerLive = ProviderSessionReaperLive.pipe(
   // Subscribes to `account.rate-limits.updated` so usage bars track live
   // telemetry instead of waiting for the next status probe.
   Layer.provideMerge(ProviderUsageLimitsIngestionLive),
+  Layer.provideMerge(RuntimeHookObservers.layer),
   Layer.provideMerge(DocumentLifecycle.layer),
   Layer.provideMerge(AmbientWork.layer),
   Layer.provideMerge(BackgroundJobs.layer.pipe(Layer.provide(BackgroundJobAuthority.layer))),
@@ -537,6 +540,7 @@ const ProviderRuntimeLayerLive = ProviderSessionReaperLive.pipe(
       AgentDocuments.layer,
       AgentDocumentAssets.layer,
       ThreadRuntimeService.layer,
+      RuntimeHooks.layer.pipe(Layer.provide(ProcessRunner.layer)),
     ),
   ),
   Layer.provideMerge(ProviderLayerLive.pipe(Layer.provideMerge(SharedWorkspaceActivity.layer))),

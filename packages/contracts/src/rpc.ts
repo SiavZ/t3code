@@ -19,6 +19,7 @@ import * as Scheduled from "./scheduledWork.ts";
 import * as Jobs from "./backgroundJobs.ts";
 import * as Grants from "./unattendedGrants.ts";
 import * as Runtime from "./runtimeOperations.ts";
+import * as Hooks from "./runtimeHooks.ts";
 import * as Desktop from "./desktopAutomation.ts";
 import * as Integrations from "./integrationWorkflows.ts";
 import { ProjectId, ThreadId } from "./baseSchemas.ts";
@@ -356,6 +357,9 @@ export const WS_METHODS = {
   imagesDelete: "images.delete",
   runtimeHandoff: "runtime.handoff",
   runtimeFork: "runtime.fork",
+  runtimeHooksList: "runtimeHooks.list",
+  runtimeHooksConfigure: "runtimeHooks.configure",
+  runtimeHooksRemove: "runtimeHooks.remove",
   qualitySubscribeChanges: "quality.subscribeChanges",
   agentDocumentsPrepareAsset: "agentDocuments.prepareAsset",
   ambientConfigure: "ambient.configure",
@@ -1880,6 +1884,21 @@ export const ParityToolsRpcGroup = RpcGroup.make(
     payload: Runtime.RuntimeForkInput,
     success: Runtime.RuntimeOperationReceipt,
     error: Schema.Union([Runtime.RuntimeOperationError, EnvironmentAuthorizationError]),
+  }),
+  Rpc.make(WS_METHODS.runtimeHooksList, {
+    payload: Schema.Struct({ projectId: ProjectId }),
+    success: Schema.Array(Hooks.RuntimeHook),
+    error: Schema.Union([Hooks.RuntimeHooksError, EnvironmentAuthorizationError]),
+  }),
+  Rpc.make(WS_METHODS.runtimeHooksConfigure, {
+    payload: Hooks.RuntimeHook,
+    success: Schema.Void,
+    error: Schema.Union([Hooks.RuntimeHooksError, EnvironmentAuthorizationError]),
+  }),
+  Rpc.make(WS_METHODS.runtimeHooksRemove, {
+    payload: Schema.Struct({ projectId: ProjectId, id: TrimmedNonEmptyString }),
+    success: Schema.Void,
+    error: Schema.Union([Hooks.RuntimeHooksError, EnvironmentAuthorizationError]),
   }),
   Rpc.make(WS_METHODS.qualitySubscribeChanges, {
     payload: Quality.QualityReadInput,
