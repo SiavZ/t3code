@@ -1,3 +1,4 @@
+import { OwnedWorkersView } from "../workers/OwnedWorkersView";
 import { makeTurnCommandMetadata } from "../../lib/commandMetadata";
 import { enqueueThreadOutboxMessage } from "../../state/thread-outbox";
 import {
@@ -957,6 +958,15 @@ function ThreadRouteContent(
       <GitActionProgressOverlay progress={gitActionProgress} onDismiss={dismissGitActionResult} />
 
       <View className="flex-1 bg-screen android:overflow-hidden android:rounded-t-[28px] android:bg-thread-canvas">
+        {selectedThread && (
+          <OwnedWorkersView
+            key={`workers:${selectedThread.environmentId}:${selectedThread.id}`}
+            environmentId={selectedThread.environmentId}
+            ownerThreadId={selectedThread.id}
+            projectId={selectedThread.projectId}
+            connected={routeConnectionState === "connected"}
+          />
+        )}
         <ThreadDetailScreen
           selectedThread={selectedThreadWithDraftSettings ?? selectedThread}
           contentPresentation={contentPresentation}

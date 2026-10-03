@@ -1,4 +1,5 @@
 import {
+  CommandId,
   EnvironmentId,
   ProjectId,
   ProviderInstanceId,
@@ -241,6 +242,46 @@ describe("environment entity projections", () => {
       unsettledAt: "2026-03-09T12:00:00.000Z",
     });
     expect(merged?.messages).toBe(messages);
+  });
+
+  it("reflects worker cancellation from the shell while detail is cached", () => {
+    const worker = {
+      ownerThreadId: OTHER_THREAD_ID,
+      rootThreadId: OTHER_THREAD_ID,
+      depth: 1,
+      spawnCommandId: CommandId.make("spawn-worker"),
+      spawnFingerprint: "worker-fingerprint",
+      label: "Reviewer",
+      runtimeModeCeiling: "approval-required",
+      mcpCapabilityCeiling: ["workers"],
+      stopRequestedAt: null,
+      lastStopSequence: null,
+    } as const;
+    const detail = {
+      ...THREAD_SHELL,
+      environmentId: ENVIRONMENT_ID,
+      worker,
+      deletedAt: null,
+      messages: [],
+      proposedPlans: [],
+      activities: [],
+      checkpoints: [],
+    } satisfies OrchestrationThread & { readonly environmentId: EnvironmentId };
+    const stoppedWorker = {
+      ...worker,
+      stopRequestedAt: "2026-10-02T17:00:00.000Z",
+      lastStopSequence: 42,
+    };
+    const shell = {
+      ...THREAD_SHELL,
+      environmentId: ENVIRONMENT_ID,
+      worker: stoppedWorker,
+    };
+
+    const merged = mergeEnvironmentThread(detail, shell);
+
+    expect(merged?.worker).toBe(stoppedWorker);
+    expect(merged?.messages).toBe(detail.messages);
   });
 
   it("preserves untouched project and thread identities across unrelated shell updates", () => {

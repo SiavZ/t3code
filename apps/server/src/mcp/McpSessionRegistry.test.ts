@@ -1,12 +1,25 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { expect, it } from "@effect/vitest";
-import { EnvironmentId, ProviderInstanceId, ThreadId } from "@t3tools/contracts";
+import {
+  CommandId,
+  DEFAULT_SERVER_SETTINGS,
+  EnvironmentId,
+  OrchestrationThreadShell,
+  ProjectId,
+  ProviderInstanceId,
+  ThreadId,
+} from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
+import * as Schema from "effect/Schema";
 import { HttpServer } from "effect/unstable/http";
 import * as NetAddress from "effect/unstable/net/NetAddress";
 
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
 import * as McpSessionRegistry from "./McpSessionRegistry.ts";
+import { ProjectionSnapshotQuery } from "../orchestration/Services/ProjectionSnapshotQuery.ts";
+import { ServerSettingsService } from "../serverSettings.ts";
 
 const environmentId = EnvironmentId.make("environment-1");
 const makeFakeHttpServer = (hostname: string, port = 43123) =>
@@ -105,6 +118,89 @@ it.effect("builds MCP endpoints from the bound server host", () =>
       expect(issued.config.endpoint).toBe(expectedEndpoint);
     }
   }),
+);
+
+it.effect(
+  "rechecks live settings and ancestor ceilings on every worker credential use without re-expanding a token",
+  () =>
+    Effect.gen(function* () {
+      const rootId = ThreadId.make("root");
+      const childId = ThreadId.make("child");
+      const projectId = ProjectId.make("project");
+      const decodeThread = Schema.decodeUnknownSync(OrchestrationThreadShell);
+      const root = decodeThread({
+        id: rootId,
+        projectId,
+        title: "Root",
+        modelSelection: { instanceId: "codex", model: "gpt-6.1" },
+        runtimeMode: "full-access",
+        branch: null,
+        worktreePath: null,
+        latestTurn: null,
+        session: null,
+        latestUserMessageAt: null,
+        hasPendingApprovals: false,
+        hasPendingUserInput: false,
+        hasActionableProposedPlan: false,
+        createdAt: "2026-10-02T00:00:00.000Z",
+        updatedAt: "2026-10-02T00:00:00.000Z",
+      });
+      let child = decodeThread({
+        ...root,
+        id: childId,
+        worker: {
+          ownerThreadId: rootId,
+          rootThreadId: rootId,
+          depth: 1,
+          spawnCommandId: CommandId.make("spawn"),
+          spawnFingerprint: "spawn",
+          label: "Child",
+          runtimeModeCeiling: "full-access",
+          mcpCapabilityCeiling: ["preview", "workers"],
+          stopRequestedAt: null,
+          lastStopSequence: null,
+        },
+      });
+      let settings = {
+        ...DEFAULT_SERVER_SETTINGS,
+        enableAgentBrowserAccess: true,
+        enableAgentDeviceAccess: true,
+      };
+      const registry = yield* makeRegistry(() => 1_000).pipe(
+        Effect.provide(
+          Layer.mergeAll(
+            Layer.mock(ServerSettingsService)({ getSettings: Effect.sync(() => settings) }),
+            Layer.mock(ProjectionSnapshotQuery)({
+              getThreadShellById: (id) =>
+                Effect.succeed(
+                  Option.fromNullishOr(id === rootId ? root : id === childId ? child : undefined),
+                ),
+            }),
+          ),
+        ),
+      );
+      const issued = yield* registry.issue({
+        threadId: childId,
+        providerInstanceId: ProviderInstanceId.make("codex"),
+        capabilities: new Set(["preview", "device", "pull-requests", "workers"]),
+      });
+      const token = issued.config.authorizationHeader.slice(7);
+      expect([...(yield* registry.resolve(token))!.capabilities].sort()).toEqual([
+        "preview",
+        "workers",
+      ]);
+      settings = { ...settings, enableAgentBrowserAccess: false };
+      expect([...(yield* registry.resolve(token))!.capabilities]).toEqual(["workers"]);
+      settings = { ...settings, enableAgentBrowserAccess: true };
+      expect([...(yield* registry.resolve(token))!.capabilities]).toEqual(["workers"]);
+      child = {
+        ...child,
+        worker: { ...child.worker!, stopRequestedAt: "2026-10-02T01:00:00.000Z" },
+      };
+      expect([...(yield* registry.resolve(token))!.capabilities]).toEqual([]);
+      child = { ...child, worker: { ...child.worker!, stopRequestedAt: null } };
+      expect([...(yield* registry.resolve(token))!.capabilities]).toEqual([]);
+    }),
 );
 
 it.effect("expires credentials once their session stops showing signs of life", () =>

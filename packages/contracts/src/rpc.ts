@@ -8,6 +8,19 @@ import {
 import * as Schema from "effect/Schema";
 import * as Rpc from "effect/unstable/rpc/Rpc";
 import * as RpcGroup from "effect/unstable/rpc/RpcGroup";
+import {
+  WorkerSpawnInput,
+  WorkerListInput,
+  WorkerGetInput,
+  WorkerSendInput,
+  WorkerStopInput,
+  WorkerWaitInput,
+  WorkerOperationResult,
+  WorkerListResult,
+  WorkerGetResult,
+  WorkerWaitResult,
+  WorkerOperationError,
+} from "./workers.ts";
 import { NonNegativeInt, TrimmedNonEmptyString } from "./baseSchemas.ts";
 import {
   CodexAuthCallbackInput,
@@ -287,6 +300,12 @@ import {
 import { VcsError } from "./vcs.ts";
 
 export const WS_METHODS = {
+  workersSpawn: "workers.spawn",
+  workersList: "workers.list",
+  workersGet: "workers.get",
+  workersSend: "workers.send",
+  workersStop: "workers.stop",
+  workersWait: "workers.wait",
   // Project registry methods
   projectsList: "projects.list",
   projectsAdd: "projects.add",
@@ -1449,7 +1468,45 @@ const WsSubscribeResourceTelemetryRpc = Rpc.make(WS_METHODS.subscribeResourceTel
   stream: true,
 });
 
+const workerRpcError = Schema.Union([WorkerOperationError, EnvironmentAuthorizationError]);
+const WsWorkersSpawnRpc = Rpc.make(WS_METHODS.workersSpawn, {
+  payload: WorkerSpawnInput,
+  success: WorkerOperationResult,
+  error: workerRpcError,
+});
+const WsWorkersListRpc = Rpc.make(WS_METHODS.workersList, {
+  payload: WorkerListInput,
+  success: WorkerListResult,
+  error: workerRpcError,
+});
+const WsWorkersGetRpc = Rpc.make(WS_METHODS.workersGet, {
+  payload: WorkerGetInput,
+  success: WorkerGetResult,
+  error: workerRpcError,
+});
+const WsWorkersSendRpc = Rpc.make(WS_METHODS.workersSend, {
+  payload: WorkerSendInput,
+  success: WorkerOperationResult,
+  error: workerRpcError,
+});
+const WsWorkersStopRpc = Rpc.make(WS_METHODS.workersStop, {
+  payload: WorkerStopInput,
+  success: WorkerOperationResult,
+  error: workerRpcError,
+});
+const WsWorkersWaitRpc = Rpc.make(WS_METHODS.workersWait, {
+  payload: WorkerWaitInput,
+  success: WorkerWaitResult,
+  error: workerRpcError,
+});
+
 export const WsRpcGroup = RpcGroup.make(
+  WsWorkersSpawnRpc,
+  WsWorkersListRpc,
+  WsWorkersGetRpc,
+  WsWorkersSendRpc,
+  WsWorkersStopRpc,
+  WsWorkersWaitRpc,
   WsServerProbeRpc,
   WsServerGetConfigRpc,
   WsServerRefreshProvidersRpc,

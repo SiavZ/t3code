@@ -93,6 +93,7 @@ const makeWithOptions = Effect.fn("McpSessionRegistry.make")(function* (
   const environment = yield* ServerEnvironment.ServerEnvironment;
   const environmentId = yield* environment.getEnvironmentId;
   const httpServer = yield* HttpServer.HttpServer;
+  const threadCapabilities = yield* McpInvocationContext.makeThreadMcpCapabilities;
   const state = yield* SynchronizedRef.make<RegistryState>({ records: new Map() });
   const currentTimeMillis = options.now ? Effect.sync(options.now) : Clock.currentTimeMillis;
   const livenessWindowMs = options.livenessWindowMs ?? DEFAULT_LIVENESS_WINDOW_MS;
@@ -120,15 +121,17 @@ const makeWithOptions = Effect.fn("McpSessionRegistry.make")(function* (
       const providerSessionId = yield* crypto.randomUUIDv4.pipe(Effect.orDie);
       const rawToken = yield* crypto.randomBytes(32).pipe(Effect.map(tokenFromBytes), Effect.orDie);
       const tokenHash = yield* hashToken(rawToken);
+      const liveCapabilities = yield* threadCapabilities(request.threadId);
       const scope: McpInvocationContext.McpInvocationScope = {
         environmentId,
         threadId: ThreadId.make(request.threadId),
         providerSessionId,
         providerInstanceId: ProviderInstanceId.make(request.providerInstanceId),
-        capabilities: new Set<McpInvocationContext.McpCapability>([
-          "pull-requests",
-          ...request.capabilities,
-        ]),
+        capabilities: new Set<McpInvocationContext.McpCapability>(
+          ["pull-requests" as const, ...request.capabilities].filter(
+            (capability) => liveCapabilities?.has(capability) ?? true,
+          ),
+        ),
         issuedAt,
       };
       yield* SynchronizedRef.update(state, ({ records }) => {
@@ -155,13 +158,28 @@ const makeWithOptions = Effect.fn("McpSessionRegistry.make")(function* (
       if (rawToken.length === 0) return undefined;
       const tokenHash = yield* hashToken(rawToken);
       const timestamp = yield* currentTimeMillis;
+      const record = yield* SynchronizedRef.get(state).pipe(
+        Effect.map(({ records }) => records.get(tokenHash)),
+      );
+      if (!record) return undefined;
+      const liveCapabilities = yield* threadCapabilities(record.scope.threadId);
       return yield* SynchronizedRef.modify(state, ({ records }) => {
         const current = pruneDead(records, timestamp);
         const record = current.get(tokenHash);
         if (!record) return [undefined, { records: current }] as const;
         const next = new Map(current);
-        next.set(tokenHash, { ...record, lastAliveAt: timestamp });
-        return [record.scope, { records: next }] as const;
+        const scope = liveCapabilities
+          ? {
+              ...record.scope,
+              capabilities: new Set(
+                [...record.scope.capabilities].filter((capability) =>
+                  liveCapabilities.has(capability),
+                ),
+              ),
+            }
+          : record.scope;
+        next.set(tokenHash, { ...record, scope, lastAliveAt: timestamp });
+        return [scope, { records: next }] as const;
       });
     },
   );

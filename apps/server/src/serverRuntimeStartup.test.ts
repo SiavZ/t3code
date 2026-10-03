@@ -165,6 +165,10 @@ it.effect("resolveAutoBootstrapWelcomeTargets returns existing project and threa
       Effect.provideService(ProjectionSnapshotQuery.ProjectionSnapshotQuery, {
         getUserInputActivity: () => Effect.die("unused"),
         listActivitiesByKind: () => Effect.succeed([]),
+        getWorkerSpawnMetadata: () => Effect.die("unused"),
+        getWorkerAdmissionStates: () => Effect.die("unused"),
+        getWorkerState: () => Effect.die("unused"),
+        listWorkerStates: () => Effect.die("unused"),
         getCommandReadModel: () => Effect.die("unused"),
         getSnapshot: () => Effect.die("unused"),
         getShellSnapshot: () => Effect.die("unused"),
@@ -295,6 +299,10 @@ it.effect.each([
       Effect.provideService(ProjectionSnapshotQuery.ProjectionSnapshotQuery, {
         getUserInputActivity: () => Effect.die("unused"),
         listActivitiesByKind: () => Effect.succeed([]),
+        getWorkerSpawnMetadata: () => Effect.die("unused"),
+        getWorkerAdmissionStates: () => Effect.die("unused"),
+        getWorkerState: () => Effect.die("unused"),
+        listWorkerStates: () => Effect.die("unused"),
         getCommandReadModel: () => Effect.die("unused"),
         getSnapshot: () => Effect.die("unused"),
         getShellSnapshot: () => Effect.die("unused"),
@@ -383,6 +391,10 @@ it.effect(
         Effect.provideService(ProjectionSnapshotQuery.ProjectionSnapshotQuery, {
           getUserInputActivity: () => Effect.die("unused"),
           listActivitiesByKind: () => Effect.succeed([]),
+          getWorkerSpawnMetadata: () => Effect.die("unused"),
+          getWorkerAdmissionStates: () => Effect.die("unused"),
+          getWorkerState: () => Effect.die("unused"),
+          listWorkerStates: () => Effect.die("unused"),
           getCommandReadModel: () => Effect.die("unused"),
           getSnapshot: () => Effect.die("unused"),
           getShellSnapshot: () => Effect.die("unused"),
@@ -449,6 +461,10 @@ it.effect("resolveAutoBootstrapWelcomeTargets preserves typed UUID generation fa
       Effect.provideService(ProjectionSnapshotQuery.ProjectionSnapshotQuery, {
         getUserInputActivity: () => Effect.die("unused"),
         listActivitiesByKind: () => Effect.succeed([]),
+        getWorkerSpawnMetadata: () => Effect.die("unused"),
+        getWorkerAdmissionStates: () => Effect.die("unused"),
+        getWorkerState: () => Effect.die("unused"),
+        listWorkerStates: () => Effect.die("unused"),
         getCommandReadModel: () => Effect.die("unused"),
         getSnapshot: () => Effect.die("unused"),
         getShellSnapshot: () => Effect.die("unused"),

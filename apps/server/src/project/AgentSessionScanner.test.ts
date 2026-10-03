@@ -36,6 +36,10 @@ const makeProjectShell = (workspaceRoot: string): OrchestrationProjectShell => (
 /** Only `getShellSnapshot` is exercised; the rest must not be called. */
 const makeProjectionSnapshotQueryLayer = (importedWorkspaceRoots: ReadonlyArray<string>) =>
   Layer.succeed(ProjectionSnapshotQuery.ProjectionSnapshotQuery, {
+    getWorkerSpawnMetadata: () => Effect.die("unused"),
+    getWorkerAdmissionStates: () => Effect.die("unused"),
+    getWorkerState: () => Effect.die("unused"),
+    listWorkerStates: () => Effect.die("unused"),
     getCommandReadModel: () => Effect.die("unused"),
     getUserInputActivity: () => Effect.die("unused"),
     listActivitiesByKind: () => Effect.die("unused"),

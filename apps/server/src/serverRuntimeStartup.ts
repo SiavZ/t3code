@@ -478,6 +478,59 @@ const clearProviderSessionContinuationMarkers = (threadIds: ReadonlyArray<Thread
     yield* clearContinuationMarkers(directory, threadIds);
   }).pipe(Effect.mapError(toServerUpdateThreadContinuationError));
 
+export const reconcileWorkerPendingStarts = Effect.gen(function* () {
+  const query = yield* ProjectionSnapshotQuery.ProjectionSnapshotQuery;
+  const engine = yield* OrchestrationEngine.OrchestrationEngineService;
+  const states = yield* query.getWorkerAdmissionStates([]);
+  const inactiveStates = states.filter(
+    ({ thread }) =>
+      thread.session?.status !== "starting" &&
+      thread.session?.status !== "running" &&
+      thread.session?.activeTurnId == null,
+  );
+  const stoppingStates = inactiveStates.filter(
+    ({ thread }) => thread.worker?.stopRequestedAt != null && thread.session?.status !== "stopped",
+  );
+  if (stoppingStates.length > 0) {
+    const providerService = yield* ProviderService.ProviderService;
+    const liveThreadIds = new Set(
+      (yield* providerService.listSessions()).map((session) => session.threadId),
+    );
+    for (const { thread } of stoppingStates) {
+      if (liveThreadIds.has(thread.id)) {
+        yield* providerService.stopSession({ threadId: thread.id });
+      }
+    }
+  }
+  for (const { thread, pendingMessageId } of inactiveStates) {
+    const stopping = thread.worker?.stopRequestedAt != null;
+    if (pendingMessageId === null && !stopping) continue;
+    const createdAt = DateTime.formatIso(yield* DateTime.now);
+    yield* engine.dispatch({
+      type: "thread.session.set",
+      commandId: CommandId.make(
+        stopping
+          ? `server:worker-stop-reconcile:${thread.id}:${thread.worker?.lastStopSequence}`
+          : `server:worker-pending-reconcile:${thread.id}:${pendingMessageId}`,
+      ),
+      threadId: thread.id,
+      session: {
+        threadId: thread.id,
+        status: stopping ? "stopped" : "interrupted",
+        providerName: thread.session?.providerName ?? null,
+        providerInstanceId: thread.modelSelection.instanceId,
+        runtimeMode: thread.runtimeMode,
+        activeTurnId: null,
+        lastError: stopping
+          ? null
+          : "Worker startup was interrupted by a server restart. Send a new message to continue.",
+        updatedAt: createdAt,
+      },
+      createdAt,
+    });
+  }
+});
+
 export const reconcileProviderSessions = Effect.gen(function* () {
   const crypto = yield* Crypto.Crypto;
   const directory = yield* ProviderSessionDirectory.ProviderSessionDirectory;
@@ -966,6 +1019,7 @@ export const make = (options?: StartupOptions) =>
         }),
       );
 
+      yield* runStartupPhase("workers.pending-starts.reconcile", reconcileWorkerPendingStarts);
       yield* runStartupPhase("provider-sessions.reconcile", reconcileProviderSessions);
       yield* runStartupPhase("worktree-setups.reconcile", reconcileWorktreeSetups);
 

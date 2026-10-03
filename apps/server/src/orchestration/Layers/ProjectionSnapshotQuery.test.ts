@@ -451,6 +451,7 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
       assert.deepEqual(snapshot.threads, [
         {
           id: ThreadId.make("thread-1"),
+          worker: null,
           projectId: asProjectId("project-1"),
           title: "Thread 1",
           modelSelection: {
@@ -578,6 +579,7 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
       assert.deepEqual(shellSnapshot.threads, [
         {
           id: ThreadId.make("thread-1"),
+          worker: null,
           projectId: asProjectId("project-1"),
           title: "Thread 1",
           modelSelection: {

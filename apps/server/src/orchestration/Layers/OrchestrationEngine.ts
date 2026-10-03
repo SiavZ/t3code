@@ -3,9 +3,9 @@ import type {
   OrchestrationEvent,
   OrchestrationReadModel,
   ProjectId,
-  ThreadId,
 } from "@t3tools/contracts";
-import { OrchestrationCommand } from "@t3tools/contracts";
+import * as NodeCrypto from "node:crypto";
+import { OrchestrationCommand, ThreadId, WorkerOperationError } from "@t3tools/contracts";
 import * as Cause from "effect/Cause";
 import * as Clock from "effect/Clock";
 import * as Crypto from "effect/Crypto";
@@ -22,6 +22,8 @@ import * as Queue from "effect/Queue";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
+
+const isWorkerOperationError = Schema.is(WorkerOperationError);
 
 import {
   metricAttributes,
@@ -109,7 +111,31 @@ const makeOrchestrationEngine = Effect.gen(function* () {
     });
 
   const processEnvelope = (envelope: CommandEnvelope): Effect.Effect<void> => {
+    const workerCommand =
+      envelope.command.type === "thread.worker.spawn" ||
+      envelope.command.type === "thread.worker.send" ||
+      envelope.command.type === "thread.worker.stop"
+        ? {
+            type: envelope.command.type,
+            callerThreadId: envelope.command.callerThreadId,
+            fingerprint: NodeCrypto.createHash("sha256")
+              .update(
+                JSON.stringify([
+                  envelope.command.type,
+                  envelope.command.callerThreadId,
+                  envelope.command.threadId,
+                  envelope.command.type === "thread.worker.spawn"
+                    ? envelope.command.spawnFingerprint
+                    : envelope.command.type === "thread.worker.send"
+                      ? envelope.command.text
+                      : null,
+                ]),
+              )
+              .digest("hex"),
+          }
+        : undefined;
     const dispatchStartSequence = commandReadModel.snapshotSequence;
+    let existingReceiptFound = false;
     let processingStartedAtMs = 0;
     const aggregateRef = commandToAggregateRef(envelope.command);
     const baseMetricAttributes = {
@@ -145,6 +171,7 @@ const makeOrchestrationEngine = Effect.gen(function* () {
           commandId: envelope.command.commandId,
         });
         if (Option.isSome(existingReceipt)) {
+          existingReceiptFound = true;
           // A receipt only proves this exact command was handled. Replaying it
           // for a command aimed at another aggregate would report success for
           // work that never happened.
@@ -161,6 +188,48 @@ const makeOrchestrationEngine = Effect.gen(function* () {
             });
           }
           if (existingReceipt.value.status === "accepted") {
+            if (workerCommand !== undefined) {
+              const receiptEvents = yield* Stream.runCollect(
+                eventStore.readFromSequence(existingReceipt.value.resultSequence - 1, 1),
+              );
+              const receiptEvent = Array.from(receiptEvents)[0];
+              const savedCommand = receiptEvent?.metadata.workerCommand;
+              if (
+                receiptEvent?.sequence !== existingReceipt.value.resultSequence ||
+                savedCommand?.type !== workerCommand.type ||
+                savedCommand.callerThreadId !== workerCommand.callerThreadId ||
+                savedCommand.fingerprint !== workerCommand.fingerprint
+              ) {
+                return yield* new WorkerOperationError({
+                  operation:
+                    envelope.command.type === "thread.worker.spawn"
+                      ? "spawn"
+                      : envelope.command.type === "thread.worker.stop"
+                        ? "stop"
+                        : "send",
+                  code: "conflict",
+                  detail:
+                    "This command identifier was already accepted for a different worker operation or input.",
+                });
+              }
+            }
+            if (envelope.command.type === "thread.worker.spawn") {
+              const savedWorker = yield* projectionSnapshotQuery.getWorkerSpawnMetadata(
+                envelope.command.threadId,
+              );
+              if (
+                Option.isNone(savedWorker) ||
+                savedWorker.value.spawnCommandId !== envelope.command.commandId ||
+                savedWorker.value.ownerThreadId !== envelope.command.callerThreadId ||
+                savedWorker.value.spawnFingerprint !== envelope.command.spawnFingerprint
+              ) {
+                return yield* new WorkerOperationError({
+                  operation: "spawn",
+                  code: "conflict",
+                  detail: "This worker spawn command was already accepted with different inputs.",
+                });
+              }
+            }
             return {
               sequence: existingReceipt.value.resultSequence,
             };
@@ -242,9 +311,24 @@ const makeOrchestrationEngine = Effect.gen(function* () {
           envelope.command.type === "thread.user-input.dismiss"
             ? yield* projectionSnapshotQuery.getUserInputActivity(envelope.command)
             : Option.none();
+        const currentCommand = envelope.command;
+        const workerStates =
+          currentCommand.type === "thread.worker.spawn" ||
+          currentCommand.type === "thread.worker.send" ||
+          currentCommand.type === "thread.delete" ||
+          currentCommand.type === "project.delete" ||
+          (currentCommand.type === "thread.turn.start" &&
+            commandReadModel.threads.some(
+              (thread) => thread.id === currentCommand.threadId && thread.worker != null,
+            ))
+            ? yield* projectionSnapshotQuery.getWorkerAdmissionStates(
+                threadBackgroundLiveness.getLiveThreadIds().map((id) => ThreadId.make(id)),
+              )
+            : undefined;
         const eventBase = yield* decideOrchestrationCommand({
           command: envelope.command,
           readModel: commandReadModel,
+          ...(workerStates !== undefined ? { workerStates } : {}),
           ...(Option.isSome(userInputActivity)
             ? { userInputActivity: userInputActivity.value }
             : {}),
@@ -260,7 +344,14 @@ const makeOrchestrationEngine = Effect.gen(function* () {
                 }),
           ),
         );
-        const plannedEvents = Array.isArray(eventBase) ? eventBase : [eventBase];
+        const decidedEvents = Array.isArray(eventBase) ? eventBase : [eventBase];
+        const plannedEvents =
+          workerCommand === undefined
+            ? decidedEvents
+            : decidedEvents.map((event) => ({
+                ...event,
+                metadata: { ...event.metadata, workerCommand },
+              }));
         // Stamp the dispatching client's origin onto every event the command
         // produced. The decider stays pure; attribution is an engine concern.
         const eventBases =
@@ -374,7 +465,8 @@ const makeOrchestrationEngine = Effect.gen(function* () {
           const error = Cause.squash(exit.cause) as OrchestrationDispatchError;
           if (
             !isOrchestrationCommandPreviouslyRejectedError(error) &&
-            !isOrchestrationCommandIdConflictError(error)
+            !isOrchestrationCommandIdConflictError(error) &&
+            !existingReceiptFound
           ) {
             yield* reconcileReadModelAfterDispatchFailure.pipe(
               Effect.catch(() =>
@@ -389,7 +481,10 @@ const makeOrchestrationEngine = Effect.gen(function* () {
               ),
             );
 
-            if (isOrchestrationCommandRejection(error)) {
+            if (
+              isOrchestrationCommandRejection(error) &&
+              !(isWorkerOperationError(error) && (error.code === "busy" || error.code === "limit"))
+            ) {
               yield* commandReceiptRepository
                 .upsert({
                   commandId: envelope.command.commandId,

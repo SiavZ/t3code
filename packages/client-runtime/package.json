@@ -3,6 +3,14 @@
   "private": true,
   "type": "module",
   "exports": {
+    "./workers/model": {
+      "types": "./src/workers/model.ts",
+      "default": "./src/workers/model.ts"
+    },
+    "./state/owned-workers": {
+      "types": "./src/state/ownedWorkers.ts",
+      "default": "./src/state/ownedWorkers.ts"
+    },
     "./device/stream": {
       "types": "./src/device/stream.ts",
       "default": "./src/device/stream.ts"

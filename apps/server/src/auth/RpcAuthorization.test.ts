@@ -56,6 +56,19 @@ describe("RPC authorization scopes", () => {
     );
   });
 
+  it("allows worker observation without granting delegation or cancellation", () => {
+    for (const method of [WS_METHODS.workersList, WS_METHODS.workersGet, WS_METHODS.workersWait]) {
+      expect(requiredScopeForRpcMethod(method)).toBe(AuthOrchestrationReadScope);
+    }
+    for (const method of [
+      WS_METHODS.workersSpawn,
+      WS_METHODS.workersSend,
+      WS_METHODS.workersStop,
+    ]) {
+      expect(requiredScopeForRpcMethod(method)).toBe(AuthOrchestrationOperateScope);
+    }
+  });
+
   it("reads the reviewer menu under the same scope as the pull request it belongs to", () => {
     // The candidate list is a read like the detail beside it, and asking somebody for a review is
     // a write like every other pull request operation.
