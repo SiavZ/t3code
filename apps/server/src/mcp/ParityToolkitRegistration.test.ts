@@ -7,6 +7,7 @@ import * as McpSchema from "effect/unstable/ai/McpSchema";
 import * as Tool from "effect/unstable/ai/Tool";
 import { CoordinationToolkit } from "./toolkits/coordination/tools.ts";
 import { WorkersToolkit } from "./toolkits/workers/tools.ts";
+import { MemoryToolkit } from "./toolkits/memory/tools.ts";
 
 const decodeToolJsonSchema = Schema.decodeUnknownEffect(McpSchema.ToolJsonSchema);
 
@@ -26,14 +27,24 @@ const registrationHandlers = Layer.mergeAll(
     workers_stop: uncalled,
     workers_wait: uncalled,
   }),
+  MemoryToolkit.toLayer({
+    memory_remember: uncalled,
+    memory_recall: uncalled,
+    memory_search: uncalled,
+    memory_forget: uncalled,
+    memory_tag: uncalled,
+    memory_link: uncalled,
+    memory_related: uncalled,
+  }),
 );
 it.effect("all added toolkits register through the MCP server", () =>
   Effect.scoped(
     Effect.gen(function* () {
       yield* McpServer.registerToolkit(CoordinationToolkit);
       yield* McpServer.registerToolkit(WorkersToolkit);
+      yield* McpServer.registerToolkit(MemoryToolkit);
       const server = yield* McpServer.McpServer;
-      expect(server.tools.length).toBe(10);
+      expect(server.tools.length).toBe(17);
       for (const { tool } of server.tools) expect(tool.inputSchema.type, tool.name).toBe("object");
     }).pipe(Effect.provide(registrationHandlers), Effect.provide(McpServer.McpServer.layer)),
   ),
@@ -41,7 +52,7 @@ it.effect("all added toolkits register through the MCP server", () =>
 
 it.effect("all added toolkits expose MCP-compatible object parameter schemas", () =>
   Effect.gen(function* () {
-    for (const toolkit of [CoordinationToolkit, WorkersToolkit]) {
+    for (const toolkit of [CoordinationToolkit, WorkersToolkit, MemoryToolkit]) {
       for (const tool of Object.values(toolkit.tools)) {
         const encoded = Tool.getJsonSchema(tool);
         expect(encoded.type, tool.name).toBe("object");

@@ -8,11 +8,24 @@ const unary =
 
 /** Typed operations reuse the selected environment's authenticated local or remote session. */
 export const parityOperations = {
+  globalMemory: {
+    read: unary(WS_METHODS.memoryGlobalRead),
+    write: unary(WS_METHODS.memoryGlobalWrite),
+  },
   coordination: {
     read: unary(WS_METHODS.coordinationRead),
     write: unary(WS_METHODS.coordinationWrite),
     mailboxRead: unary(WS_METHODS.coordinationMailboxRead),
     mailboxWrite: unary(WS_METHODS.coordinationMailboxWrite),
+  },
+  memory: {
+    remember: unary(WS_METHODS.memoryRemember),
+    recall: unary(WS_METHODS.memoryRecall),
+    search: unary(WS_METHODS.memorySearch),
+    forget: unary(WS_METHODS.memoryForget),
+    tag: unary(WS_METHODS.memoryTag),
+    link: unary(WS_METHODS.memoryLink),
+    related: unary(WS_METHODS.memoryRelated),
   },
   unattendedGrants: {
     create: unary(WS_METHODS.unattendedGrantCreate),

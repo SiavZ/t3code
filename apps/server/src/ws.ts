@@ -81,6 +81,7 @@ import {
   WsRpcGroup,
   WsCoreRpcGroup,
   ParityToolsRpcGroup,
+  IntegrationWorkflowRpcGroup,
   WORKTREE_SETUP_ACTIVITY_KIND,
   worktreeSetupActivityId,
   type WorktreeSetupSnapshot,
@@ -107,6 +108,8 @@ import {
 } from "./orchestration/Normalizer.ts";
 import * as OrchestrationEngine from "./orchestration/Services/OrchestrationEngine.ts";
 import * as OwnedWorkers from "./orchestration/OwnedWorkers.ts";
+import * as GlobalMemory from "./memory/GlobalMemory.ts";
+import * as Memory from "./memory/Memory.ts";
 import * as UnattendedGrants from "./orchestration/UnattendedGrants.ts";
 import * as CoordinationPlans from "./orchestration/CoordinationPlans.ts";
 import * as ProjectionSnapshotQuery from "./orchestration/Services/ProjectionSnapshotQuery.ts";
@@ -504,6 +507,20 @@ function readClientAnalyticsProps(request: HttpServerRequest.HttpServerRequest) 
   };
 }
 
+const makeIntegrationWorkflowRpcLayer = (currentSession: EnvironmentAuth.AuthenticatedSession) =>
+  IntegrationWorkflowRpcGroup.toLayer(
+    Effect.gen(function* () {
+      const currentSessionId = currentSession.sessionId;
+      const globalMemory = yield* GlobalMemory.GlobalMemory;
+      return {
+        [WS_METHODS.memoryGlobalRead]: (input) =>
+          globalMemory.read(input, { humanSessionId: currentSessionId, admin: true }),
+        [WS_METHODS.memoryGlobalWrite]: (input) =>
+          globalMemory.write(input, { humanSessionId: currentSessionId, admin: true }),
+      };
+    }),
+  );
+
 const makeWsRpcLayer = (
   currentSession: EnvironmentAuth.AuthenticatedSession,
   clientOrigin: OrchestrationClientOrigin,
@@ -513,11 +530,13 @@ const makeWsRpcLayer = (
   Layer.mergeAll(
     makeWsCoreRpcLayer(currentSession, clientOrigin, clientAnalyticsProps, previewAutomationBroker),
     makeParityToolsRpcLayer(),
+    makeIntegrationWorkflowRpcLayer(currentSession),
   );
 
 const makeParityToolsRpcLayer = () =>
   ParityToolsRpcGroup.toLayer(
     Effect.gen(function* () {
+      const memory = yield* Memory.MemoryService;
       const unattendedGrants = yield* UnattendedGrants.UnattendedGrants;
       const coordinationPlans = yield* CoordinationPlans.CoordinationPlans;
       return ParityToolsRpcGroup.of({
@@ -526,6 +545,20 @@ const makeParityToolsRpcLayer = () =>
         [WS_METHODS.unattendedGrantList]: (input) => unattendedGrants.list(input),
         [WS_METHODS.unattendedGrantRevoke]: (input) =>
           unattendedGrants.revoke(input, { source: "client" }),
+        [WS_METHODS.memoryRemember]: ({ projectId, input }) =>
+          memory.remember(input, { projectId, allowGlobal: false }),
+        [WS_METHODS.memoryRecall]: ({ projectId, input }) =>
+          memory.recall(input, { projectId, allowGlobal: false }),
+        [WS_METHODS.memorySearch]: ({ projectId, input }) =>
+          memory.search(input, { projectId, allowGlobal: false }),
+        [WS_METHODS.memoryForget]: ({ projectId, input }) =>
+          memory.forget(input, { projectId, allowGlobal: false }),
+        [WS_METHODS.memoryTag]: ({ projectId, input }) =>
+          memory.tag(input, { projectId, allowGlobal: false }),
+        [WS_METHODS.memoryLink]: ({ projectId, input }) =>
+          memory.link(input, { projectId, allowGlobal: false }),
+        [WS_METHODS.memoryRelated]: ({ projectId, input }) =>
+          memory.related(input, { projectId, allowGlobal: false }),
         [WS_METHODS.coordinationMailboxRead]: (input) => coordinationPlans.mailboxRead(input),
         [WS_METHODS.coordinationMailboxWrite]: (input) => coordinationPlans.mailboxWrite(input),
         [WS_METHODS.coordinationRead]: (input) => coordinationPlans.read(input),
@@ -4169,6 +4202,8 @@ export const websocketRpcRouteLayer = Layer.unwrap(
     });
     const pullRequests = yield* PullRequestService.PullRequestService;
     const ownedWorkers = yield* OwnedWorkers.OwnedWorkers;
+    const globalMemory = yield* GlobalMemory.GlobalMemory;
+    const memory = yield* Memory.MemoryService;
     const unattendedGrants = yield* UnattendedGrants.UnattendedGrants;
     const coordinationPlans = yield* CoordinationPlans.CoordinationPlans;
     const sql = yield* SqlClient.SqlClient;
@@ -4216,9 +4251,11 @@ export const websocketRpcRouteLayer = Layer.unwrap(
                 // mutation invalidates the HTTP diff cache that every client reads from.
                 Layer.provide(Layer.succeed(PullRequestService.PullRequestService, pullRequests)),
                 Layer.provide(Layer.succeed(OwnedWorkers.OwnedWorkers, ownedWorkers)),
+                Layer.provide(Layer.succeed(Memory.MemoryService, memory)),
                 Layer.provide(Layer.succeed(UnattendedGrants.UnattendedGrants, unattendedGrants)),
               )
               .pipe(
+                Layer.provide(Layer.succeed(GlobalMemory.GlobalMemory, globalMemory)),
                 Layer.provide(
                   Layer.succeed(CoordinationPlans.CoordinationPlans, coordinationPlans),
                 ),

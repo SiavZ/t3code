@@ -10,8 +10,15 @@ import {
   type ThreadEnvMode,
   type WorktreeSubmodules,
   PROJECT_SCOPED_SERVER_SETTING_KEYS,
+  OPTIONAL_AGENT_TOOL_CAPABILITIES,
   type ProjectScopedServerSettingKey,
 } from "@t3tools/contracts";
+import {
+  MEMORY_AUTO_RECALL_NOTICE,
+  OPTIONAL_AGENT_TOOLS_NOTICE,
+  OPTIONAL_AGENT_TOOL_DETAILS,
+  optionalAgentToolCapabilityValue,
+} from "@t3tools/client-runtime/operations/agent-tool-settings";
 import { useRef, useState, type ComponentProps } from "react";
 import { Alert, Platform, Pressable, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -32,6 +39,7 @@ import { useSettingsEnvironmentFilter } from "./settings-environment-filter";
 import {
   planMobileScopedSettingsClear,
   planMobileScopedSettingsPatch,
+  planMobileAgentToolCapability,
   resolveMobileSettingsTargets,
   type ScopedMobileSettingsTarget,
 } from "./settings-scoped-server";
@@ -48,7 +56,12 @@ const PAGE_TITLES: Record<SettingsPage, string> = {
 const PAGE_PROJECT_KEYS: Record<SettingsPage, readonly ProjectScopedServerSettingKey[]> = {
   "new-threads": ["defaultThreadEnvMode", "worktreeSubmodules", "defaultRuntimeMode"],
   "source-control": ["defaultAutoPull", "newWorktreesStartFromOrigin"],
-  "agent-behavior": ["responseStreamingMode", "enableAgentBrowserAccess"],
+  "agent-behavior": [
+    "responseStreamingMode",
+    "enableAgentBrowserAccess",
+    "agentToolCapabilities",
+    "enableMemoryAutoRecall",
+  ],
   maintenance: ["continueThreadsAfterServerUpdate"],
 };
 
@@ -164,9 +177,8 @@ function ServerSettingsDetail(props: { readonly page: SettingsPage }) {
     label: "environment settings update",
     reportFailure: true,
   });
-  const write = (patch: ServerSettingsPatch) => {
+  const writePlanned = (writes: ReturnType<typeof planMobileScopedSettingsPatch>) => {
     if (writeInFlight.current || !hasConnectedSelection) return;
-    const writes = planMobileScopedSettingsPatch(targets, projectSelected, patch);
     if (writes.length === 0) return;
     writeInFlight.current = true;
     setPendingTargets(targets);
@@ -181,6 +193,8 @@ function ServerSettingsDetail(props: { readonly page: SettingsPage }) {
       setPendingWrites((count) => count - 1);
     });
   };
+  const write = (patch: ServerSettingsPatch) =>
+    writePlanned(planMobileScopedSettingsPatch(targets, projectSelected, patch));
   const clearProjectOverrides = () => {
     if (writeInFlight.current) return;
     const writes = planMobileScopedSettingsClear(targets, PAGE_PROJECT_KEYS[props.page]);
@@ -396,6 +410,64 @@ function ServerSettingsDetail(props: { readonly page: SettingsPage }) {
                       onValueChange={(value) => write({ enableAgentBrowserAccess: value })}
                     />
                   </SettingsSection>
+                  <Text className="px-2 text-sm leading-normal text-foreground-muted">
+                    {OPTIONAL_AGENT_TOOLS_NOTICE}
+                  </Text>
+                  <SettingsSection title="Optional agent tools">
+                    {OPTIONAL_AGENT_TOOL_CAPABILITIES.map((capability) => (
+                      <FanoutSwitchRow
+                        key={capability}
+                        icon="globe"
+                        label={OPTIONAL_AGENT_TOOL_DETAILS[capability].label}
+                        subtitle={OPTIONAL_AGENT_TOOL_DETAILS[capability].description}
+                        value={optionalAgentToolCapabilityValue(
+                          displayTargets.map((target) => target.settings),
+                          capability,
+                        )}
+                        disabled={disabledFor("agentToolCapabilities")}
+                        onValueChange={(enabled) =>
+                          writePlanned(
+                            planMobileAgentToolCapability(
+                              targets,
+                              projectSelected,
+                              capability,
+                              enabled,
+                            ),
+                          )
+                        }
+                      />
+                    ))}
+                  </SettingsSection>
+                  <SettingsSection title="Memory">
+                    {!projectSelected && (
+                      <FanoutSwitchRow
+                        icon="brain"
+                        label="Allow global memory"
+                        subtitle="Allow authorized clients to read and write memories shared across projects in this environment. This does not enable automatic global recall or grant agents global memory access."
+                        value={uniform("enableGlobalMemory")}
+                        disabled={disabledFor("enableGlobalMemory")}
+                        onValueChange={(enabled) => write({ enableGlobalMemory: enabled })}
+                      />
+                    )}
+                    <FanoutSwitchRow
+                      icon="brain"
+                      label="Automatic memory recall"
+                      subtitle={MEMORY_AUTO_RECALL_NOTICE}
+                      value={uniform("enableMemoryAutoRecall")}
+                      disabled={disabledFor("enableMemoryAutoRecall")}
+                      onValueChange={(enabled) => write({ enableMemoryAutoRecall: enabled })}
+                    />
+                  </SettingsSection>
+                  {!projectSelected ? (
+                    <SettingsRow
+                      icon="arrow.clockwise"
+                      label="Reset optional agent tools and recall"
+                      disabled={disabled}
+                      onPress={() =>
+                        write({ agentToolCapabilities: [], enableMemoryAutoRecall: false })
+                      }
+                    />
+                  ) : null}
                 </>
               ) : null}
 
@@ -550,6 +622,15 @@ function FanoutSwitchRow(props: {
       label={props.label}
       subtitle={props.subtitle}
     >
+      <Pressable
+        accessibilityLabel={`Set ${props.label} off for selected targets`}
+        accessibilityRole="button"
+        disabled={props.disabled}
+        className="rounded-full bg-subtle px-3 py-2 active:opacity-70"
+        onPress={() => props.onValueChange(false)}
+      >
+        <Text className="text-sm font-t3-medium text-foreground">Set off</Text>
+      </Pressable>
       <Pressable
         accessibilityLabel={`Set ${props.label} on for selected environments`}
         accessibilityRole="button"

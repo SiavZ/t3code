@@ -52,12 +52,12 @@ it.effect("rechecks explicit project opt-ins without expanding immutable worker 
         spawnFingerprint: "optional-tools-spawn",
         label: "Worker",
         runtimeModeCeiling: "full-access",
-        mcpCapabilityCeiling: ["preview", "workers"],
+        mcpCapabilityCeiling: ["memory", "workers"],
         stopRequestedAt: null,
         lastStopSequence: null,
       },
     });
-    let settings = { ...DEFAULT_SERVER_SETTINGS, enableAgentBrowserAccess: false };
+    let settings = DEFAULT_SERVER_SETTINGS;
     const resolve = yield* McpInvocationContext.makeThreadMcpCapabilities.pipe(
       Effect.provide(
         Layer.mergeAll(
@@ -71,16 +71,16 @@ it.effect("rechecks explicit project opt-ins without expanding immutable worker 
         ),
       ),
     );
-    expect((yield* resolve(rootId))?.has("preview")).toBe(false);
-    settings = { ...settings, enableAgentBrowserAccess: true };
-    expect((yield* resolve(rootId))?.has("preview")).toBe(true);
-    expect([...(yield* resolve(workerId))!].sort()).toEqual(["preview", "workers"]);
+    expect((yield* resolve(rootId))?.has("memory")).toBe(false);
+    settings = { ...settings, agentToolCapabilities: ["memory"] };
+    expect((yield* resolve(rootId))?.has("memory")).toBe(true);
+    expect([...(yield* resolve(workerId))!].sort()).toEqual(["memory", "workers"]);
     settings = {
       ...settings,
-      projectSettingsOverrides: { [projectId]: { enableAgentBrowserAccess: false } },
+      projectSettingsOverrides: { [projectId]: { agentToolCapabilities: [] } },
     };
     expect([...(yield* resolve(workerId))!]).toEqual(["workers"]);
-    expect((yield* resolve(ThreadId.make("missing")))?.has("workers")).toBe(false);
+    expect((yield* resolve(ThreadId.make("missing")))?.has("memory")).toBe(false);
   }),
 );
 

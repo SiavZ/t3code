@@ -23,11 +23,20 @@ type WsRpcMethod = RpcGroup.Rpcs<typeof WsRpcGroup>["_tag"];
  * runtime failure.
  */
 export const RPC_REQUIRED_SCOPES = {
+  [WS_METHODS.memoryGlobalRead]: AuthAccessWriteScope,
+  [WS_METHODS.memoryGlobalWrite]: AuthAccessWriteScope,
   [WS_METHODS.coordinationMailboxRead]: AuthOrchestrationReadScope,
   [WS_METHODS.coordinationMailboxWrite]: AuthOrchestrationOperateScope,
   [WS_METHODS.unattendedGrantCreate]: AuthAccessWriteScope,
   [WS_METHODS.unattendedGrantList]: AuthOrchestrationReadScope,
   [WS_METHODS.unattendedGrantRevoke]: AuthAccessWriteScope,
+  [WS_METHODS.memoryRemember]: AuthOrchestrationOperateScope,
+  [WS_METHODS.memoryRecall]: AuthOrchestrationReadScope,
+  [WS_METHODS.memorySearch]: AuthOrchestrationReadScope,
+  [WS_METHODS.memoryForget]: AuthOrchestrationOperateScope,
+  [WS_METHODS.memoryTag]: AuthOrchestrationOperateScope,
+  [WS_METHODS.memoryLink]: AuthOrchestrationOperateScope,
+  [WS_METHODS.memoryRelated]: AuthOrchestrationReadScope,
   [WS_METHODS.coordinationRead]: AuthOrchestrationReadScope,
   [WS_METHODS.coordinationWrite]: AuthOrchestrationOperateScope,
   [ORCHESTRATION_WS_METHODS.dispatchCommand]: AuthOrchestrationOperateScope,

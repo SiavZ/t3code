@@ -68,11 +68,15 @@ export const makeThreadMcpCapabilities = Effect.gen(function* () {
             enableAgentDeviceAccess:
               settings.enableAgentDeviceAccess &&
               !overridden.some((entry) => entry.enableAgentDeviceAccess !== undefined),
+            agentToolCapabilities: [],
           };
       let capabilities = new Set<McpCapability>(["pull-requests"]);
       if (ancestors.length > 0) capabilities.add("workers");
       if (access.enableAgentBrowserAccess) capabilities.add("preview");
       if (access.enableAgentDeviceAccess) capabilities.add("device");
+      if (ancestors.length > 0) {
+        for (const capability of access.agentToolCapabilities) capabilities.add(capability);
+      }
       for (const ancestor of ancestors) {
         const worker = ancestor.worker;
         if (worker) {

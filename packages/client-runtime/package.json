@@ -15,6 +15,10 @@
       "types": "./src/operations/parity.ts",
       "default": "./src/operations/parity.ts"
     },
+    "./operations/agent-tool-settings": {
+      "types": "./src/operations/agentToolSettings.ts",
+      "default": "./src/operations/agentToolSettings.ts"
+    },
     "./device/stream": {
       "types": "./src/device/stream.ts",
       "default": "./src/device/stream.ts"

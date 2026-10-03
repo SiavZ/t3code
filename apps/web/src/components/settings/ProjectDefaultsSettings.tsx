@@ -1,9 +1,16 @@
 import {
   DEFAULT_SERVER_SETTINGS,
+  OPTIONAL_AGENT_TOOL_CAPABILITIES,
   type ModelSelection,
   type ProviderInstanceId,
   type WorktreeSubmodules,
 } from "@t3tools/contracts";
+import {
+  MEMORY_AUTO_RECALL_NOTICE,
+  OPTIONAL_AGENT_TOOLS_NOTICE,
+  OPTIONAL_AGENT_TOOL_DETAILS,
+  optionalAgentToolCapabilityValue,
+} from "@t3tools/client-runtime/operations/agent-tool-settings";
 import { createModelSelection } from "@t3tools/shared/model";
 import { resolveProjectSettings } from "@t3tools/shared/projectSettings";
 import { useNavigate } from "@tanstack/react-router";
@@ -39,6 +46,7 @@ import {
   useScopedSettingsMixed,
   useScopedSettingSource,
   useUpdateScopedSettings,
+  useUpdateScopedAgentToolCapability,
 } from "./useScopedSettings";
 
 /**
@@ -55,6 +63,9 @@ export function ProjectDefaultsSettings({ category }: { category: ProjectSetting
   const { scope, target, targets, connectedEnvironments } = useSettingsScope();
   const settings = useScopedSettings();
   const updateSettings = useUpdateScopedSettings();
+  const updateCapability = useUpdateScopedAgentToolCapability();
+  const mixedRecall = useScopedSettingsMixed(["enableMemoryAutoRecall"]);
+  const mixedGlobalMemory = useScopedSettingsMixed(["enableGlobalMemory"]);
   const navigate = useNavigate();
   const { environments } = useEnvironments();
   const representative = target
@@ -260,7 +271,7 @@ export function ProjectDefaultsSettings({ category }: { category: ProjectSetting
         category === "general" || category === "project"
           ? "New threads"
           : category === "integrations"
-            ? "Browser"
+            ? "Agent tools"
             : "Repositories"
       }
     >
@@ -463,6 +474,96 @@ export function ProjectDefaultsSettings({ category }: { category: ProjectSetting
         </>
       ) : (
         <>
+          <p className="text-sm text-muted-foreground">{OPTIONAL_AGENT_TOOLS_NOTICE}</p>
+          {OPTIONAL_AGENT_TOOL_CAPABILITIES.map((capability) => {
+            const value = optionalAgentToolCapabilityValue(
+              targets.map((entry) => entry.settings),
+              capability,
+            );
+            const { label, description } = OPTIONAL_AGENT_TOOL_DETAILS[capability];
+            return (
+              <SettingsRow
+                key={capability}
+                serverScoped
+                settingKeys={["agentToolCapabilities"]}
+                mixed={value === null}
+                id={`agent-tool-${capability}`}
+                title={label}
+                description={description}
+                resetAction={
+                  value !== false ? (
+                    <SettingResetButton
+                      label={label.toLowerCase()}
+                      onClick={() => updateCapability(capability, false)}
+                    />
+                  ) : null
+                }
+                control={
+                  <Switch
+                    aria-label={label}
+                    mixed={value === null}
+                    checked={value === true}
+                    onCheckedChange={(enabled) => updateCapability(capability, enabled)}
+                  />
+                }
+              />
+            );
+          })}
+          <SettingsRow
+            serverScoped
+            settingKeys={["enableMemoryAutoRecall"]}
+            mixed={mixedRecall}
+            id="memory-auto-recall"
+            title="Automatic memory recall"
+            description={MEMORY_AUTO_RECALL_NOTICE}
+            status={
+              targets.some((entry) => !entry.settings.agentToolCapabilities.includes("memory"))
+                ? "Inactive where Memory is off"
+                : undefined
+            }
+            resetAction={
+              mixedRecall || settings.enableMemoryAutoRecall ? (
+                <SettingResetButton
+                  label="automatic memory recall"
+                  onClick={() => updateSettings({ enableMemoryAutoRecall: false })}
+                />
+              ) : null
+            }
+            control={
+              <Switch
+                aria-label="Automatic memory recall"
+                mixed={mixedRecall}
+                checked={!mixedRecall && settings.enableMemoryAutoRecall}
+                onCheckedChange={(enabled) => updateSettings({ enableMemoryAutoRecall: enabled })}
+              />
+            }
+          />
+          {!isProjectScope && (
+            <SettingsRow
+              serverScoped
+              settingKeys={["enableGlobalMemory"]}
+              mixed={mixedGlobalMemory}
+              id="allow-global-memory"
+              title="Allow global memory"
+              description="Allow authorized clients to read and write memories shared across projects in this environment. This does not enable automatic global recall or grant agents global memory access."
+              resetAction={
+                mixedGlobalMemory || settings.enableGlobalMemory ? (
+                  <SettingResetButton
+                    label="global memory"
+                    onClick={() => updateSettings({ enableGlobalMemory: false })}
+                  />
+                ) : null
+              }
+              control={
+                <Switch
+                  aria-label="Allow global memory"
+                  mixed={mixedGlobalMemory}
+                  checked={!mixedGlobalMemory && settings.enableGlobalMemory}
+                  onCheckedChange={(enabled) => updateSettings({ enableGlobalMemory: enabled })}
+                />
+              }
+            />
+          )}
           <SettingsRow
             serverScoped
             settingKeys={["enableAgentBrowserAccess"]}

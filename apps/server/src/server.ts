@@ -1,5 +1,6 @@
 // @effect-diagnostics nodeBuiltinImport:off
 import * as NodeHttp from "node:http";
+import * as GlobalMemory from "./memory/GlobalMemory.ts";
 
 import * as NodeHttpServer from "@effect/platform-node/NodeHttpServer";
 import * as NodeServices from "@effect/platform-node/NodeServices";
@@ -163,6 +164,7 @@ import * as UsageService from "./usage/UsageService.ts";
 import { OrchestrationLayerLive } from "./orchestration/runtimeLayer.ts";
 import * as OwnedWorkers from "./orchestration/OwnedWorkers.ts";
 import * as SharedWorkspaceActivity from "./workspace/SharedWorkspaceActivity.ts";
+import * as Memory from "./memory/Memory.ts";
 import * as UnattendedGrants from "./orchestration/UnattendedGrants.ts";
 import * as ProjectionSnapshotQuery from "./orchestration/Services/ProjectionSnapshotQuery.ts";
 import {
@@ -470,11 +472,13 @@ const CloudManagedEndpointRuntimeLive = Layer.mergeAll(
 );
 
 const ProviderRuntimeLayerLive = ProviderSessionReaperLive.pipe(
+  Layer.provideMerge(GlobalMemory.layer),
   // Subscribes to `account.rate-limits.updated` so usage bars track live
   // telemetry instead of waiting for the next status probe.
   Layer.provideMerge(ProviderUsageLimitsIngestionLive),
   Layer.provideMerge(UnattendedGrants.layer),
   Layer.provideMerge(OwnedWorkers.layer),
+  Layer.provideMerge(Memory.layer),
   Layer.provideMerge(ProviderLayerLive.pipe(Layer.provideMerge(SharedWorkspaceActivity.layer))),
   Layer.provideMerge(WorkspaceLayerLive),
   Layer.provideMerge(OrchestrationLayerLive),

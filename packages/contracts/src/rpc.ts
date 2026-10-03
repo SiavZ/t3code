@@ -9,8 +9,10 @@ import * as Schema from "effect/Schema";
 import * as Rpc from "effect/unstable/rpc/Rpc";
 import * as RpcGroup from "effect/unstable/rpc/RpcGroup";
 import * as Coordination from "./coordination.ts";
+import * as Memory from "./memory.ts";
 import * as Scheduled from "./scheduledWork.ts";
 import * as Grants from "./unattendedGrants.ts";
+import { ProjectId } from "./baseSchemas.ts";
 import {
   WorkerSpawnInput,
   WorkerListInput,
@@ -303,9 +305,18 @@ import {
 import { VcsError } from "./vcs.ts";
 
 export const WS_METHODS = {
+  memoryGlobalRead: "memoryGlobal.read",
+  memoryGlobalWrite: "memoryGlobal.write",
   unattendedGrantCreate: "unattendedGrants.create",
   unattendedGrantList: "unattendedGrants.list",
   unattendedGrantRevoke: "unattendedGrants.revoke",
+  memoryRemember: "memory.remember",
+  memoryRecall: "memory.recall",
+  memorySearch: "memory.search",
+  memoryForget: "memory.forget",
+  memoryTag: "memory.tag",
+  memoryLink: "memory.link",
+  memoryRelated: "memory.related",
   coordinationMailboxRead: "coordination.mailboxRead",
   coordinationMailboxWrite: "coordination.mailboxWrite",
   coordinationRead: "coordination.read",
@@ -1510,6 +1521,19 @@ const WsWorkersWaitRpc = Rpc.make(WS_METHODS.workersWait, {
   error: workerRpcError,
 });
 
+export const IntegrationWorkflowRpcGroup = RpcGroup.make(
+  Rpc.make(WS_METHODS.memoryGlobalRead, {
+    payload: Memory.GlobalMemoryReadInput,
+    success: Memory.MemoryResult,
+    error: Schema.Union([Memory.MemoryError, EnvironmentAuthorizationError]),
+  }),
+  Rpc.make(WS_METHODS.memoryGlobalWrite, {
+    payload: Memory.GlobalMemoryWriteInput,
+    success: Memory.MemoryMutationResult,
+    error: Schema.Union([Memory.MemoryError, EnvironmentAuthorizationError]),
+  }),
+);
+
 // Parity tool RPCs live in their own group. One group holding every RPC exceeds the
 // compiler's instantiation depth in the server's handler layer.
 export const ParityToolsRpcGroup = RpcGroup.make(
@@ -1537,6 +1561,41 @@ export const ParityToolsRpcGroup = RpcGroup.make(
     payload: Grants.UnattendedGrantReadInput,
     success: Grants.UnattendedGrant,
     error: Schema.Union([Scheduled.ScheduledWorkError, EnvironmentAuthorizationError]),
+  }),
+  Rpc.make(WS_METHODS.memoryRemember, {
+    payload: Schema.Struct({ projectId: ProjectId, input: Memory.MemoryRememberInput }),
+    success: Memory.MemoryMutationResult,
+    error: Schema.Union([Memory.MemoryError, EnvironmentAuthorizationError]),
+  }),
+  Rpc.make(WS_METHODS.memoryRecall, {
+    payload: Schema.Struct({ projectId: ProjectId, input: Memory.MemoryReadInput }),
+    success: Memory.MemoryResult,
+    error: Schema.Union([Memory.MemoryError, EnvironmentAuthorizationError]),
+  }),
+  Rpc.make(WS_METHODS.memorySearch, {
+    payload: Schema.Struct({ projectId: ProjectId, input: Memory.MemoryReadInput }),
+    success: Memory.MemoryResult,
+    error: Schema.Union([Memory.MemoryError, EnvironmentAuthorizationError]),
+  }),
+  Rpc.make(WS_METHODS.memoryForget, {
+    payload: Schema.Struct({ projectId: ProjectId, input: Memory.MemoryMutationInput }),
+    success: Memory.MemoryMutationResult,
+    error: Schema.Union([Memory.MemoryError, EnvironmentAuthorizationError]),
+  }),
+  Rpc.make(WS_METHODS.memoryTag, {
+    payload: Schema.Struct({ projectId: ProjectId, input: Memory.MemoryTagInput }),
+    success: Memory.MemoryMutationResult,
+    error: Schema.Union([Memory.MemoryError, EnvironmentAuthorizationError]),
+  }),
+  Rpc.make(WS_METHODS.memoryLink, {
+    payload: Schema.Struct({ projectId: ProjectId, input: Memory.MemoryLinkInput }),
+    success: Memory.MemoryMutationResult,
+    error: Schema.Union([Memory.MemoryError, EnvironmentAuthorizationError]),
+  }),
+  Rpc.make(WS_METHODS.memoryRelated, {
+    payload: Schema.Struct({ projectId: ProjectId, input: Memory.MemoryRelatedInput }),
+    success: Memory.MemoryResult,
+    error: Schema.Union([Memory.MemoryError, EnvironmentAuthorizationError]),
   }),
   Rpc.make(WS_METHODS.coordinationRead, {
     payload: Coordination.CoordinationReadInput,
@@ -1712,4 +1771,5 @@ export const WsCoreRpcGroup = RpcGroup.make(
 export const WsRpcGroup = RpcGroup.make(
   ...WsCoreRpcGroup.requests.values(),
   ...ParityToolsRpcGroup.requests.values(),
+  ...IntegrationWorkflowRpcGroup.requests.values(),
 );

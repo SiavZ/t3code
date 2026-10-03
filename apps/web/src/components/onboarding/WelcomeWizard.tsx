@@ -1579,7 +1579,9 @@ function ImportRepositoryGroup({
           <ChevronRightIcon className="size-3.5 shrink-0 text-muted-foreground transition-transform group-data-panel-open:rotate-90" />
           <span className="truncate text-sm font-medium">{group.label}</span>
           <ImportRowMeta
-            sources={[...new Set(group.candidates.flatMap((c) => c.sources))]}
+            sources={nativeOnboardingSources([
+              ...new Set(group.candidates.flatMap((c) => c.sources)),
+            ])}
             threadCount={group.threadCount}
             lastActiveAt={group.lastActiveAt}
           />
@@ -1638,11 +1640,19 @@ function ImportCandidateRow({
         <TooltipPopup variant="code">{candidate.path}</TooltipPopup>
       </Tooltip>
       <ImportRowMeta
-        sources={nested ? null : candidate.sources}
+        sources={nested ? null : nativeOnboardingSources(candidate.sources)}
         threadCount={candidate.threadCount}
         lastActiveAt={candidate.lastActiveAt}
       />
     </label>
+  );
+}
+
+// Native onboarding supports only the legacy Claude/Codex scanners. Other
+// history sources use the separate normalized history-only import flow.
+function nativeOnboardingSources(sources: AgentSessionProjectCandidate["sources"]) {
+  return sources.filter(
+    (source): source is "claudeAgent" | "codex" => source === "claudeAgent" || source === "codex",
   );
 }
 

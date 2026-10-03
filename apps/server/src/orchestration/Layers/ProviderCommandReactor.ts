@@ -73,6 +73,7 @@ import { resolveProjectSettings } from "@t3tools/shared/projectSettings";
 import { VcsStatusBroadcaster } from "../../vcs/VcsStatusBroadcaster.ts";
 import { GitWorkflowService } from "../../git/GitWorkflowService.ts";
 import * as TerminalManager from "../../terminal/Manager.ts";
+import { makeMemoryTurnContext } from "../../memory/MemoryTurnContext.ts";
 const isProviderAdapterProcessError = Schema.is(ProviderAdapterProcessError);
 const isProviderAdapterRequestError = Schema.is(ProviderAdapterRequestError);
 const isProviderAdapterValidationError = Schema.is(ProviderAdapterValidationError);
@@ -232,6 +233,7 @@ const make = Effect.gen(function* () {
   const vcsStatusBroadcaster = yield* VcsStatusBroadcaster;
   const textGeneration = yield* TextGeneration;
   const serverSettingsService = yield* ServerSettingsService;
+  const memoryTurnContext = yield* makeMemoryTurnContext;
   const terminalManager = yield* TerminalManager.TerminalManager;
   /** Environment settings with the thread's project overrides applied. */
   const projectSettingsForThread = Effect.fnUntraced(function* (threadId: ThreadId) {
@@ -909,7 +911,8 @@ const make = Effect.gen(function* () {
     if (input.modelSelection !== undefined) {
       threadModelSelections.set(input.threadId, input.modelSelection);
     }
-    const normalizedInput = toNonEmptyProviderInput(input.messageText);
+    const memoryInput = yield* memoryTurnContext(input.threadId, input.messageText);
+    const normalizedInput = toNonEmptyProviderInput(memoryInput);
     const normalizedAttachments = input.attachments ?? [];
     const activeSession = yield* providerService
       .listSessions()

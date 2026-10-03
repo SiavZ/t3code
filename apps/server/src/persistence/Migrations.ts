@@ -69,6 +69,7 @@ import Migration0054 from "./Migrations/054_ProjectionThreadsAutoSettleDisabledA
 import Migration0055 from "./Migrations/055_ProjectionThreadsWorkers.ts";
 import Migration0056 from "./Migrations/056_UnattendedAuthority.ts";
 import Migration0057 from "./Migrations/057_CoordinationPlans.ts";
+import Migration0058 from "./Migrations/058_Memory.ts";
 
 /**
  * Migration loader with all migrations defined inline.
@@ -138,6 +139,7 @@ const migrationEntries = [
   [55, "ProjectionThreadsWorkers", Migration0055],
   [56, "UnattendedAuthority", Migration0056],
   [57, "CoordinationPlans", Migration0057],
+  [58, "Memory", Migration0058],
 ] as const;
 
 export const migrationManifest = migrationEntries.map(([id, name]) => [id, name] as const);

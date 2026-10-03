@@ -17,14 +17,30 @@ import {
 
 describe("RPC authorization scopes", () => {
   it("keeps parity observation readable without granting mutation or host execution", () => {
-    for (const method of [WS_METHODS.coordinationRead, WS_METHODS.coordinationMailboxRead])
+    for (const method of [
+      WS_METHODS.coordinationRead,
+      WS_METHODS.coordinationMailboxRead,
+      WS_METHODS.memoryRecall,
+      WS_METHODS.memorySearch,
+      WS_METHODS.memoryRelated,
+    ])
       expect(requiredScopeForRpcMethod(method)).toBe(AuthOrchestrationReadScope);
-    for (const method of [WS_METHODS.coordinationWrite, WS_METHODS.coordinationMailboxWrite])
+    for (const method of [
+      WS_METHODS.coordinationWrite,
+      WS_METHODS.coordinationMailboxWrite,
+      WS_METHODS.memoryRemember,
+      WS_METHODS.memoryForget,
+    ])
       expect(requiredScopeForRpcMethod(method)).toBe(AuthOrchestrationOperateScope);
   });
 
   it("requires administrative permission before granting unattended authority or configuring executable integrations", () => {
-    for (const method of [WS_METHODS.unattendedGrantCreate, WS_METHODS.unattendedGrantRevoke])
+    for (const method of [
+      WS_METHODS.unattendedGrantCreate,
+      WS_METHODS.unattendedGrantRevoke,
+      WS_METHODS.memoryGlobalRead,
+      WS_METHODS.memoryGlobalWrite,
+    ])
       expect(requiredScopeForRpcMethod(method)).toBe(AuthAccessWriteScope);
   });
   it("declares exactly one scope for every RPC in the server group", () => {

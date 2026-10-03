@@ -5,6 +5,8 @@ import * as CoordinationPlans from "../orchestration/CoordinationPlans.ts";
 import * as CoordinationPlanStore from "../orchestration/CoordinationPlanStore.ts";
 import * as CoordinationReactor from "../orchestration/CoordinationReactor.ts";
 import * as WorkspacePaths from "../workspace/WorkspacePaths.ts";
+import * as Memory from "../memory/Memory.ts";
+import * as GlobalMemory from "../memory/GlobalMemory.ts";
 import * as ProcessRunner from "../processRunner.ts";
 import { OrchestrationCommandReceiptRepositoryLive } from "../persistence/Layers/OrchestrationCommandReceipts.ts";
 
@@ -13,10 +15,12 @@ import { OrchestrationCommandReceiptRepositoryLive } from "../persistence/Layers
 export const parityDependenciesLayer = UnattendedGrants.layer.pipe(
   Layer.provideMerge(OwnedWorkers.layer),
   Layer.provideMerge(OrchestrationCommandReceiptRepositoryLive),
+  Layer.provideMerge(GlobalMemory.layer),
   Layer.provideMerge(
     Layer.mergeAll(
       CoordinationPlans.layer.pipe(Layer.provide(CoordinationPlanStore.layer)),
       CoordinationReactor.layer,
+      Memory.layer,
     ),
   ),
   Layer.provide(WorkspacePaths.layer),

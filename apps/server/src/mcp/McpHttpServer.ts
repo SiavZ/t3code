@@ -36,6 +36,8 @@ import { WorkersToolkitHandlersLive } from "./toolkits/workers/handlers.ts";
 import { WorkersToolkit } from "./toolkits/workers/tools.ts";
 import { CoordinationToolkit } from "./toolkits/coordination/tools.ts";
 import { CoordinationToolkitHandlersLive } from "./toolkits/coordination/handlers.ts";
+import { MemoryToolkit } from "./toolkits/memory/tools.ts";
+import { MemoryToolkitHandlersLive } from "./toolkits/memory/handlers.ts";
 import {
   DeviceScreenshotToolkitHandlersLive,
   DeviceStandardToolkitHandlersLive,
@@ -680,5 +682,6 @@ export const layer = Layer.mergeAll(
   PullRequestsToolkitRegistrationLive,
   WorkersToolkitRegistrationLive,
   McpServer.toolkit(CoordinationToolkit).pipe(Layer.provide(CoordinationToolkitHandlersLive)),
+  McpServer.toolkit(MemoryToolkit).pipe(Layer.provide(MemoryToolkitHandlersLive)),
   DeviceToolkitRegistrationLive,
 ).pipe(Layer.provideMerge(McpTransportLive));

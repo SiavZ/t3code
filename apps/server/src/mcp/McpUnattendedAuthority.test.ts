@@ -34,7 +34,7 @@ const authority = Schema.decodeUnknownSync(ThreadUnattendedAuthority)({
   grantRevision: 1,
   ownerThreadId: threadId,
   runtimeModeCeiling: "approval-required",
-  mcpCapabilityCeiling: ["workers", "device"],
+  mcpCapabilityCeiling: ["workers", "memory"],
 });
 const origin: NativeUnattendedActivation["Service"] = {
   messageId: MessageId.make("scheduled-message"),
@@ -60,7 +60,7 @@ const root = Schema.decodeUnknownSync(OrchestrationThreadShell)({
 });
 const contextLayer = Layer.mergeAll(
   Layer.mock(ServerSettingsService)({
-    getSettings: Effect.succeed({ ...DEFAULT_SERVER_SETTINGS, enableAgentDeviceAccess: true }),
+    getSettings: Effect.succeed({ ...DEFAULT_SERVER_SETTINGS, agentToolCapabilities: ["memory"] }),
   }),
   Layer.mock(ProjectionSnapshotQuery)({
     getThreadShellById: (id) => Effect.succeed(id === threadId ? Option.some(root) : Option.none()),
@@ -79,7 +79,7 @@ const initialize = Effect.gen(function* () {
   yield* sql`INSERT INTO unattended_grants
     (grant_id,owner_thread_id,project_id,revision,ceiling_json,created_at)
     VALUES (${authority.grantId},${threadId},${projectId},1,
-      ${JSON.stringify({ runtimeMode: "approval-required", mcpCapabilities: ["device", "workers"] })},
+      ${JSON.stringify({ runtimeMode: "approval-required", mcpCapabilities: ["memory", "workers"] })},
       '2026-10-03T00:00:00.000Z')`;
   yield* sql`INSERT INTO projection_thread_activation_authorities VALUES
     (${threadId},${origin.messageId},${origin.sequence},${JSON.stringify(authority)})`;
@@ -107,7 +107,7 @@ const issue = (registry: McpSessionRegistry.McpSessionRegistry["Service"]) =>
   registry.issue({
     threadId,
     providerInstanceId: ProviderInstanceId.make("codex"),
-    capabilities: new Set(["device", "workers", "preview", "pull-requests"]),
+    capabilities: new Set(["memory", "workers", "preview", "pull-requests"]),
   });
 
 it.layer(NodeSqliteClient.layer({ filename: ":memory:" }))("unattended MCP authority", (it) => {
@@ -117,7 +117,7 @@ it.layer(NodeSqliteClient.layer({ filename: ":memory:" }))("unattended MCP autho
       Effect.gen(function* () {
         const sql = yield* initialize;
         const resolve = yield* makeThreadMcpCapabilities.pipe(Effect.provide(contextLayer));
-        expect([...(yield* resolve(threadId))!].sort()).toEqual(["device", "workers"]);
+        expect([...(yield* resolve(threadId))!].sort()).toEqual(["memory", "workers"]);
         yield* sql`UPDATE unattended_grants SET revoked = 1`;
         expect([...(yield* resolve(threadId))!]).toEqual([]);
         yield* sql`UPDATE unattended_grants SET revoked = 0, revision = 2`;
@@ -137,14 +137,14 @@ it.layer(NodeSqliteClient.layer({ filename: ":memory:" }))("unattended MCP autho
         );
         const token = issued.config.authorizationHeader.slice(7);
         expect([...(yield* registry.resolve(token))!.capabilities].sort()).toEqual([
-          "device",
+          "memory",
           "workers",
         ]);
         yield* sql`UPDATE projection_thread_activation_authorities
         SET message_id = 'foreground-message', event_sequence = 11, authority_json = NULL`;
         const retained = yield* registry.resolve(token);
         expect(retained?.unattendedAuthority).toEqual(authority);
-        expect([...retained!.capabilities].sort()).toEqual(["device", "workers"]);
+        expect([...retained!.capabilities].sort()).toEqual(["memory", "workers"]);
         yield* sql`UPDATE unattended_grants SET revoked = 1`;
         expect(yield* registry.resolve(token)).toBeUndefined();
         yield* sql`UPDATE unattended_grants SET revoked = 0`;
@@ -162,7 +162,7 @@ it.layer(NodeSqliteClient.layer({ filename: ":memory:" }))("unattended MCP autho
         const token = issued.config.authorizationHeader.slice(7);
         yield* sql`UPDATE projection_thread_activation_authorities SET authority_json = ${JSON.stringify(authority)}`;
         yield* registry
-          .restrictThreadCapabilities(threadId, new Set(["device", "workers"]))
+          .restrictThreadCapabilities(threadId, new Set(["memory", "workers"]))
           .pipe(Effect.provideService(NativeUnattendedActivation, origin));
         expect((yield* registry.resolve(token))?.unattendedAuthority).toEqual(authority);
         const otherAuthority = { ...authority, grantId: "grant-two" };
@@ -171,7 +171,7 @@ it.layer(NodeSqliteClient.layer({ filename: ":memory:" }))("unattended MCP autho
         SELECT 'grant-two',owner_thread_id,project_id,revision,ceiling_json,created_at FROM unattended_grants`;
         yield* sql`UPDATE projection_thread_activation_authorities
         SET authority_json = ${JSON.stringify(otherAuthority)}, message_id = 'second-message', event_sequence = 12`;
-        yield* registry.restrictThreadCapabilities(threadId, new Set(["device", "workers"])).pipe(
+        yield* registry.restrictThreadCapabilities(threadId, new Set(["memory", "workers"])).pipe(
           Effect.provideService(NativeUnattendedActivation, {
             messageId: MessageId.make("second-message"),
             sequence: 12,

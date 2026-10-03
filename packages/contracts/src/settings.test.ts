@@ -20,6 +20,48 @@ const decodeServerSettingsPatch = Schema.decodeUnknownSync(ServerSettingsPatch);
 const encodeServerSettings = Schema.encodeSync(ServerSettings);
 const decodeClaudeSettings = Schema.decodeUnknownSync(ClaudeSettings);
 
+describe("optional agent tools", () => {
+  it("does not enable new tools, automatic recall or external services for existing settings", () => {
+    const settings = decodeServerSettings({});
+    expect(settings.agentToolCapabilities).toEqual([]);
+    expect(settings.enableMemoryAutoRecall).toBe(false);
+    expect(settings.enableGlobalMemory).toBe(false);
+  });
+
+  it("round-trips explicit opt-ins and empty project overrides", () => {
+    const input = {
+      agentToolCapabilities: ["memory"],
+      enableMemoryAutoRecall: true,
+      projectSettingsOverrides: {
+        project: { agentToolCapabilities: [], enableMemoryAutoRecall: false },
+      },
+    };
+    expect(encodeServerSettings(decodeServerSettings(input))).toMatchObject(input);
+    expect(decodeServerSettingsPatch(input)).toEqual(input);
+  });
+
+  it("round-trips explicit global consent without project fanout", () => {
+    const input = {
+      enableGlobalMemory: true,
+    };
+    expect(encodeServerSettings(decodeServerSettings(input))).toMatchObject(input);
+    expect(decodeServerSettingsPatch(input)).toEqual(input);
+    expect(
+      decodeServerSettingsPatch({
+        projectSettingsOverrides: { project: input },
+      }).projectSettingsOverrides,
+    ).toEqual({ project: {} });
+    expect(decodeServerSettingsPatch({ enableGlobalMemory: false })).toEqual({
+      enableGlobalMemory: false,
+    });
+  });
+
+  it("does not accept existing authority capabilities as optional grant flags", () => {
+    expect(() => decodeServerSettingsPatch({ agentToolCapabilities: ["workers"] })).toThrow();
+    expect(() => decodeServerSettingsPatch({ agentToolCapabilities: ["full-access"] })).toThrow();
+  });
+});
+
 describe("storage cleanup settings", () => {
   it("keeps cleanup disabled for existing installations", () => {
     expect(decodeServerSettings({}).worktreeCleanup).toBeNull();

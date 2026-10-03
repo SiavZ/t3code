@@ -18,11 +18,53 @@ import {
   resolveWorktreeCleanup,
   type ProjectSettingSource,
 } from "@t3tools/shared/projectSettings";
+import { setOptionalAgentToolCapability } from "@t3tools/client-runtime/operations/agent-tool-settings";
+import type { OptionalAgentToolCapability } from "@t3tools/contracts";
 import * as Equal from "effect/Equal";
 
 import type { ResolvedSettingsScope } from "./settingsScope";
 
 export type ScopedSettingsPatch = ServerSettingsPatch & ClientSettingsPatch;
+
+export function planScopedAgentToolCapability(
+  scope: ResolvedSettingsScope,
+  environments: readonly ScopedSettingsEnvironment[],
+  capability: OptionalAgentToolCapability,
+  enabled: boolean,
+): ReturnType<typeof planScopedSettingsPatch> {
+  const plan = planScopedSettingsPatch(scope, environments, { agentToolCapabilities: [] });
+  if (scope.kind === "project" || scope.kind === "checkout") {
+    return {
+      ...plan,
+      serverWrites: projectOverrideWrites(scope, environments, (current, settings, projectId) => ({
+        ...current,
+        agentToolCapabilities: setOptionalAgentToolCapability(
+          resolveProjectSettings(settings, projectId).settings.agentToolCapabilities,
+          capability,
+          enabled,
+        ),
+      })),
+    };
+  }
+  return {
+    ...plan,
+    serverWrites: plan.serverWrites.map((write) => {
+      const settings = environments.find(
+        (environment) => environment.environmentId === write.environmentId,
+      )?.serverConfig?.settings;
+      return {
+        ...write,
+        patch: {
+          agentToolCapabilities: setOptionalAgentToolCapability(
+            settings?.agentToolCapabilities ?? [],
+            capability,
+            enabled,
+          ),
+        },
+      };
+    }),
+  };
+}
 
 interface ScopedSettingsEnvironment {
   readonly environmentId: EnvironmentId;

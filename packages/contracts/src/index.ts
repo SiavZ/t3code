@@ -30,6 +30,7 @@ export * from "./pullRequest.ts";
 export * from "./orchestration.ts";
 export * from "./workers.ts";
 export * from "./coordination.ts";
+export * from "./memory.ts";
 export * from "./scheduledWork.ts";
 export * from "./unattendedGrants.ts";
 export * from "./t3ProjectFile.ts";
