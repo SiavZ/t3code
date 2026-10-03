@@ -33,6 +33,7 @@ import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
 
 import * as ServerConfig from "./config.ts";
+import * as AgentDocuments from "./orchestration/AgentDocuments.ts";
 import * as CoordinationReactor from "./orchestration/CoordinationReactor.ts";
 import * as ScheduledWork from "./orchestration/ScheduledWork.ts";
 import * as AmbientWork from "./orchestration/AmbientWork.ts";
@@ -964,6 +965,7 @@ export const make = (options?: StartupOptions) =>
     const projectionSnapshotQuery = yield* ProjectionSnapshotQuery.ProjectionSnapshotQuery;
     const providerSessionDirectory = yield* ProviderSessionDirectory.ProviderSessionDirectory;
     const coordinationReactor = yield* CoordinationReactor.CoordinationReactor;
+    const agentDocuments = yield* AgentDocuments.AgentDocuments;
     const scheduledWork = yield* ScheduledWork.ScheduledWork;
     const ambientWork = yield* AmbientWork.AmbientWork;
     const backgroundJobs = yield* BackgroundJobs.BackgroundJobs;
@@ -1030,6 +1032,7 @@ export const make = (options?: StartupOptions) =>
       yield* runStartupPhase("workers.pending-starts.reconcile", reconcileWorkerPendingStarts);
       yield* runStartupPhase("provider-sessions.reconcile", reconcileProviderSessions);
       yield* runStartupPhase("coordination.recover", coordinationReactor.recover);
+      yield* runStartupPhase("agent-documents.recover", agentDocuments.recover);
       yield* runStartupPhase("background-jobs.reconcile", backgroundJobs.reconcile);
       yield* runStartupPhase(
         "scheduled-work.start",

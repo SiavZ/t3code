@@ -109,23 +109,23 @@ describe("optional agent tool scope", () => {
   });
   it("fans out environment toggles without replacing unrelated target flags", () => {
     const selected = [
-      environment("Laptop", { settings: { agentToolCapabilities: ["quality-records"] } }),
+      environment("Laptop", { settings: { agentToolCapabilities: ["agent-documents"] } }),
       environment("Server", { settings: { agentToolCapabilities: ["automation"] } }),
     ];
     const writes = planScopedAgentToolCapability(all, selected, "memory", true).serverWrites;
     expect(writes.map((write) => write.patch.agentToolCapabilities)).toEqual([
-      ["memory", "quality-records"],
+      ["memory", "agent-documents"],
       ["memory", "automation"],
     ]);
     expect(
-      planScopedAgentToolCapability(all, selected, "quality-records", false).serverWrites.map(
+      planScopedAgentToolCapability(all, selected, "agent-documents", false).serverWrites.map(
         (write) => write.patch.agentToolCapabilities,
       ),
     ).toEqual([[], ["automation"]]);
   });
   it("uses each project's effective flags and reset restores its own environment", () => {
     const selected = [
-      environment("Laptop", { settings: { agentToolCapabilities: ["quality-records"] } }),
+      environment("Laptop", { settings: { agentToolCapabilities: ["agent-documents"] } }),
       environment("Server", {
         settings: {
           agentToolCapabilities: ["automation"],
@@ -151,7 +151,7 @@ describe("optional agent tool scope", () => {
     expect(
       writes.find((write) => write.environmentId === laptop.environmentId)?.patch
         .projectSettingsOverrides?.[laptopProjectId],
-    ).toEqual({ agentToolCapabilities: ["memory", "quality-records"] });
+    ).toEqual({ agentToolCapabilities: ["memory", "agent-documents"] });
     const reset = planScopedSettingsClear(project, selected, [
       "agentToolCapabilities",
       "enableMemoryAutoRecall",

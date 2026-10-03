@@ -35,6 +35,7 @@ export * from "./qualityRecords.ts";
 export * from "./scheduledWork.ts";
 export * from "./unattendedGrants.ts";
 export * from "./backgroundJobs.ts";
+export * from "./agentDocuments.ts";
 export * from "./t3ProjectFile.ts";
 export * from "./editor.ts";
 export * from "./project.ts";

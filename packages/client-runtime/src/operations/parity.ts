@@ -17,6 +17,13 @@ export const parityOperations = {
     read: unary(WS_METHODS.memoryGlobalRead),
     write: unary(WS_METHODS.memoryGlobalWrite),
   },
+  agentDocuments: {
+    read: unary(WS_METHODS.agentDocumentsRead),
+    write: unary(WS_METHODS.agentDocumentsWrite),
+    action: unary(WS_METHODS.agentDocumentsAction),
+    wait: unary(WS_METHODS.agentDocumentsWait),
+    prepareAsset: unary(WS_METHODS.agentDocumentsPrepareAsset),
+  },
   coordination: {
     read: unary(WS_METHODS.coordinationRead),
     write: unary(WS_METHODS.coordinationWrite),

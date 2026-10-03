@@ -163,6 +163,9 @@ import * as UsageLimitSources from "./usage/UsageLimitSources.ts";
 import * as UsageService from "./usage/UsageService.ts";
 import { OrchestrationLayerLive } from "./orchestration/runtimeLayer.ts";
 import * as OwnedWorkers from "./orchestration/OwnedWorkers.ts";
+import * as AgentDocuments from "./orchestration/AgentDocuments.ts";
+import * as DocumentLifecycle from "./orchestration/DocumentLifecycle.ts";
+import * as AgentDocumentAssets from "./orchestration/AgentDocumentAssets.ts";
 import * as SharedWorkspaceActivity from "./workspace/SharedWorkspaceActivity.ts";
 import * as Memory from "./memory/Memory.ts";
 import * as QualityRecords from "./orchestration/QualityRecords.ts";
@@ -482,13 +485,21 @@ const ProviderRuntimeLayerLive = ProviderSessionReaperLive.pipe(
   // Subscribes to `account.rate-limits.updated` so usage bars track live
   // telemetry instead of waiting for the next status probe.
   Layer.provideMerge(ProviderUsageLimitsIngestionLive),
+  Layer.provideMerge(DocumentLifecycle.layer),
   Layer.provideMerge(AmbientWork.layer),
   Layer.provideMerge(BackgroundJobs.layer.pipe(Layer.provide(BackgroundJobAuthority.layer))),
   Layer.provideMerge(ScheduledWork.layer),
   Layer.provideMerge(ScheduledWorkActivation.layer),
   Layer.provideMerge(UnattendedGrants.layer),
   Layer.provideMerge(OwnedWorkers.layer),
-  Layer.provideMerge(Layer.mergeAll(Memory.layer, QualityRecords.layer)),
+  Layer.provideMerge(
+    Layer.mergeAll(
+      Memory.layer,
+      QualityRecords.layer,
+      AgentDocuments.layer,
+      AgentDocumentAssets.layer,
+    ),
+  ),
   Layer.provideMerge(ProviderLayerLive.pipe(Layer.provideMerge(SharedWorkspaceActivity.layer))),
   Layer.provideMerge(WorkspaceLayerLive),
   Layer.provideMerge(OrchestrationLayerLive),

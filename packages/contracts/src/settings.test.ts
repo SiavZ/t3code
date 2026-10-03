@@ -30,7 +30,7 @@ describe("optional agent tools", () => {
 
   it("round-trips explicit opt-ins and empty project overrides", () => {
     const input = {
-      agentToolCapabilities: ["memory", "quality-records"],
+      agentToolCapabilities: ["memory", "agent-documents"],
       enableMemoryAutoRecall: true,
       projectSettingsOverrides: {
         project: { agentToolCapabilities: [], enableMemoryAutoRecall: false },

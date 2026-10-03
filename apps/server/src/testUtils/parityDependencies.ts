@@ -13,6 +13,9 @@ import * as WorkspacePaths from "../workspace/WorkspacePaths.ts";
 import * as Memory from "../memory/Memory.ts";
 import * as GlobalMemory from "../memory/GlobalMemory.ts";
 import * as QualityRecords from "../orchestration/QualityRecords.ts";
+import * as AgentDocuments from "../orchestration/AgentDocuments.ts";
+import * as DocumentLifecycle from "../orchestration/DocumentLifecycle.ts";
+import * as AgentDocumentAssets from "../orchestration/AgentDocumentAssets.ts";
 import * as ProcessRunner from "../processRunner.ts";
 import { OrchestrationCommandReceiptRepositoryLive } from "../persistence/Layers/OrchestrationCommandReceipts.ts";
 
@@ -21,7 +24,9 @@ import { OrchestrationCommandReceiptRepositoryLive } from "../persistence/Layers
 export const parityStartupDependenciesLayer = Layer.mergeAll(
   AmbientWork.layer,
   BackgroundJobs.layer.pipe(Layer.provide(BackgroundJobAuthority.layer)),
+  DocumentLifecycle.layer,
 ).pipe(
+  Layer.provideMerge(AgentDocuments.layer),
   Layer.provideMerge(ScheduledWork.layer),
   Layer.provideMerge(ScheduledWorkActivation.layer),
   Layer.provideMerge(UnattendedGrants.layer),
@@ -39,6 +44,7 @@ export const parityDependenciesLayer = parityStartupDependenciesLayer.pipe(
       CoordinationReactor.layer,
       Memory.layer,
       QualityRecords.layer,
+      AgentDocumentAssets.layer,
     ),
   ),
   Layer.provide(WorkspacePaths.layer),

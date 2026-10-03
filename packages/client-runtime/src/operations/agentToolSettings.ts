@@ -25,6 +25,10 @@ export const OPTIONAL_AGENT_TOOL_DETAILS: Record<
     label: "Background jobs",
     description: "Start and manage background commands.",
   },
+  "agent-documents": {
+    label: "Agent documents",
+    description: "Create documents and interactive views in the client.",
+  },
 };
 
 /** Change one flag using each target's effective value, never a representative's array. */

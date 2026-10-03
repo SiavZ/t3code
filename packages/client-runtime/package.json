@@ -19,6 +19,14 @@
       "types": "./src/operations/agentToolSettings.ts",
       "default": "./src/operations/agentToolSettings.ts"
     },
+    "./agent-documents/model": {
+      "types": "./src/agentDocuments/model.ts",
+      "default": "./src/agentDocuments/model.ts"
+    },
+    "./state/agent-documents": {
+      "types": "./src/state/agentDocuments.ts",
+      "default": "./src/state/agentDocuments.ts"
+    },
     "./device/stream": {
       "types": "./src/device/stream.ts",
       "default": "./src/device/stream.ts"

@@ -108,6 +108,8 @@ import {
 } from "./orchestration/Normalizer.ts";
 import * as OrchestrationEngine from "./orchestration/Services/OrchestrationEngine.ts";
 import * as OwnedWorkers from "./orchestration/OwnedWorkers.ts";
+import * as AgentDocuments from "./orchestration/AgentDocuments.ts";
+import * as AgentDocumentAssets from "./orchestration/AgentDocumentAssets.ts";
 import * as AmbientWork from "./orchestration/AmbientWork.ts";
 import * as GlobalMemory from "./memory/GlobalMemory.ts";
 import * as Memory from "./memory/Memory.ts";
@@ -540,6 +542,7 @@ const makeWsRpcLayer = (
 const makeParityToolsRpcLayer = () =>
   ParityToolsRpcGroup.toLayer(
     Effect.gen(function* () {
+      const documentAssets = yield* AgentDocumentAssets.AgentDocumentAssets;
       const ambientWork = yield* AmbientWork.AmbientWork;
       const memory = yield* Memory.MemoryService;
       const qualityRecords = yield* QualityRecords.QualityRecords;
@@ -550,6 +553,7 @@ const makeParityToolsRpcLayer = () =>
       return ParityToolsRpcGroup.of({
         [WS_METHODS.qualitySubscribeChanges]: (input) =>
           qualityRecords.subscribe(input, { threadId: input.threadId, source: "user-reported" }),
+        [WS_METHODS.agentDocumentsPrepareAsset]: (input) => documentAssets.prepare(input),
         [WS_METHODS.ambientConfigure]: (input) =>
           ambientWork.configure(input, { source: "client" }),
         [WS_METHODS.ambientGet]: (input) => ambientWork.get(input),
@@ -621,6 +625,7 @@ const makeWsCoreRpcLayer = (
             );
       const orchestrationEngine = yield* OrchestrationEngine.OrchestrationEngineService;
       const ownedWorkers = yield* OwnedWorkers.OwnedWorkers;
+      const agentDocuments = yield* AgentDocuments.AgentDocuments;
       const threadDeletionReactor = yield* ThreadDeletionReactor;
       const analytics = yield* AnalyticsService.AnalyticsService;
       // Every command dispatched on this connection carries the connecting
@@ -2323,6 +2328,10 @@ const makeWsCoreRpcLayer = (
             ),
             { "rpc.aggregate": "orchestration" },
           ),
+        [WS_METHODS.agentDocumentsRead]: (input) => agentDocuments.read(input),
+        [WS_METHODS.agentDocumentsWrite]: (input) => agentDocuments.write(input),
+        [WS_METHODS.agentDocumentsAction]: (input) => agentDocuments.action(input),
+        [WS_METHODS.agentDocumentsWait]: (input) => agentDocuments.wait(input),
         [WS_METHODS.workersSpawn]: (input) =>
           observeRpcEffect(WS_METHODS.workersSpawn, ownedWorkers.spawn(input), {
             "rpc.aggregate": "workers",
@@ -4232,6 +4241,8 @@ export const websocketRpcRouteLayer = Layer.unwrap(
     });
     const pullRequests = yield* PullRequestService.PullRequestService;
     const ownedWorkers = yield* OwnedWorkers.OwnedWorkers;
+    const agentDocuments = yield* AgentDocuments.AgentDocuments;
+    const documentAssets = yield* AgentDocumentAssets.AgentDocumentAssets;
     const ambientWork = yield* AmbientWork.AmbientWork;
     const globalMemory = yield* GlobalMemory.GlobalMemory;
     const memory = yield* Memory.MemoryService;
@@ -4285,6 +4296,10 @@ export const websocketRpcRouteLayer = Layer.unwrap(
                 // mutation invalidates the HTTP diff cache that every client reads from.
                 Layer.provide(Layer.succeed(PullRequestService.PullRequestService, pullRequests)),
                 Layer.provide(Layer.succeed(OwnedWorkers.OwnedWorkers, ownedWorkers)),
+                Layer.provide(Layer.succeed(AgentDocuments.AgentDocuments, agentDocuments)),
+                Layer.provide(
+                  Layer.succeed(AgentDocumentAssets.AgentDocumentAssets, documentAssets),
+                ),
                 Layer.provide(Layer.succeed(AmbientWork.AmbientWork, ambientWork)),
                 Layer.provide(Layer.succeed(Memory.MemoryService, memory)),
                 Layer.provide(Layer.succeed(QualityRecords.QualityRecords, qualityRecords)),

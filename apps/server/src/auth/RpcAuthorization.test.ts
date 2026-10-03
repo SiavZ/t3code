@@ -18,6 +18,8 @@ import {
 describe("RPC authorization scopes", () => {
   it("keeps parity observation readable without granting mutation or host execution", () => {
     for (const method of [
+      WS_METHODS.agentDocumentsRead,
+      WS_METHODS.agentDocumentsWait,
       WS_METHODS.coordinationRead,
       WS_METHODS.coordinationMailboxRead,
       WS_METHODS.memoryRecall,
@@ -34,6 +36,9 @@ describe("RPC authorization scopes", () => {
     ])
       expect(requiredScopeForRpcMethod(method)).toBe(AuthOrchestrationReadScope);
     for (const method of [
+      WS_METHODS.agentDocumentsWrite,
+      WS_METHODS.agentDocumentsAction,
+      WS_METHODS.agentDocumentsPrepareAsset,
       WS_METHODS.coordinationWrite,
       WS_METHODS.coordinationMailboxWrite,
       WS_METHODS.memoryRemember,

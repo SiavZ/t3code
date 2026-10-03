@@ -72,8 +72,8 @@ it.effect("rechecks explicit project opt-ins without expanding immutable worker 
       ),
     );
     expect((yield* resolve(rootId))?.has("memory")).toBe(false);
-    settings = { ...settings, agentToolCapabilities: ["memory", "quality-records"] };
-    expect((yield* resolve(rootId))?.has("quality-records")).toBe(true);
+    settings = { ...settings, agentToolCapabilities: ["memory", "agent-documents"] };
+    expect((yield* resolve(rootId))?.has("agent-documents")).toBe(true);
     expect([...(yield* resolve(workerId))!].sort()).toEqual(["memory", "workers"]);
     settings = {
       ...settings,

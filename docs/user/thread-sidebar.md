@@ -70,6 +70,16 @@ prerequisites and review gates. Workers can exchange stored messages and report
 results to the plan, but a stored message does not inject a prompt into a busy
 native session. A cancelled or interrupted attempt needs an explicit retry.
 
+## Agent documents
+
+Enable **Agent documents** in the project's agent-tool settings, then ask the
+agent for an interactive document, Markdown report, or PDF from the project.
+Open **Documents** in the thread to use it. Actions belong to that document's
+owning thread, not whichever thread you select later, and sending a prompt does
+not replace your composer draft. Reconnect before submitting actions. Closed
+documents can be reopened; ephemeral documents close when their owning work
+ends or the server restarts.
+
 ## Pin and reorder threads
 
 Pin a thread from its menu to keep it above your active work.

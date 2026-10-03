@@ -73,6 +73,7 @@ import Migration0058 from "./Migrations/058_Memory.ts";
 import Migration0059 from "./Migrations/059_QualityRecords.ts";
 import Migration0060 from "./Migrations/060_ScheduledWork.ts";
 import Migration0061 from "./Migrations/061_BackgroundJobs.ts";
+import Migration0062 from "./Migrations/062_AgentDocuments.ts";
 
 /**
  * Migration loader with all migrations defined inline.
@@ -146,6 +147,7 @@ const migrationEntries = [
   [59, "QualityRecords", Migration0059],
   [60, "ScheduledWork", Migration0060],
   [61, "BackgroundJobs", Migration0061],
+  [62, "AgentDocuments", Migration0062],
 ] as const;
 
 export const migrationManifest = migrationEntries.map(([id, name]) => [id, name] as const);

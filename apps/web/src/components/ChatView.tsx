@@ -1,3 +1,4 @@
+import { AgentDocumentsSection } from "./agent-documents/AgentDocumentsSection";
 import { OwnedWorkersView } from "./workers/OwnedWorkersView";
 import { isChatGptUsageLimitError } from "@t3tools/shared/usageLimits";
 import { useLoadBalancedEnvironment } from "../hooks/useLoadBalancedEnvironment";
@@ -9807,6 +9808,15 @@ export default function ChatView(props: ChatViewProps) {
                 </div>
               </div>
             ) : null}
+            {!paintOnlyDisplayedTimeline && (
+              <AgentDocumentsSection
+                key={`${activeThread.environmentId}:${activeThread.id}`}
+                environmentId={activeThread.environmentId}
+                ownerThreadId={activeThread.id}
+                projectId={activeThread.projectId}
+                connected={activeEnvironmentConnectionPhase === "connected"}
+              />
+            )}
             {!paintOnlyDisplayedTimeline && (
               <OwnedWorkersView
                 key={`workers:${activeThread.environmentId}:${activeThread.id}`}

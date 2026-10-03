@@ -144,6 +144,7 @@ export const OPTIONAL_AGENT_TOOL_CAPABILITIES = [
   "quality-records",
   "automation",
   "background-jobs",
+  "agent-documents",
 ] as const;
 export const OptionalAgentToolCapability = Schema.Literals(OPTIONAL_AGENT_TOOL_CAPABILITIES);
 export type OptionalAgentToolCapability = typeof OptionalAgentToolCapability.Type;

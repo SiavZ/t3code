@@ -28,6 +28,17 @@ import {
   WorkerWaitResult,
   WorkerOperationError,
 } from "./workers.ts";
+import {
+  AgentDocument,
+  AgentDocumentReadInput,
+  AgentDocumentWriteInput,
+  AgentDocumentActionInput,
+  AgentDocumentWaitInput,
+  AgentDocumentAcceptedAction,
+  AgentDocumentError,
+  AgentDocumentAssetPrepareInput,
+  AgentDocumentAsset,
+} from "./agentDocuments.ts";
 import { NonNegativeInt, TrimmedNonEmptyString } from "./baseSchemas.ts";
 import {
   CodexAuthCallbackInput,
@@ -310,6 +321,7 @@ export const WS_METHODS = {
   memoryGlobalRead: "memoryGlobal.read",
   memoryGlobalWrite: "memoryGlobal.write",
   qualitySubscribeChanges: "quality.subscribeChanges",
+  agentDocumentsPrepareAsset: "agentDocuments.prepareAsset",
   ambientConfigure: "ambient.configure",
   ambientGet: "ambient.get",
   ambientStop: "ambient.stop",
@@ -341,6 +353,10 @@ export const WS_METHODS = {
   coordinationMailboxWrite: "coordination.mailboxWrite",
   coordinationRead: "coordination.read",
   coordinationWrite: "coordination.write",
+  agentDocumentsRead: "agentDocuments.read",
+  agentDocumentsWrite: "agentDocuments.write",
+  agentDocumentsAction: "agentDocuments.action",
+  agentDocumentsWait: "agentDocuments.wait",
   workersSpawn: "workers.spawn",
   workersList: "workers.list",
   workersGet: "workers.get",
@@ -1541,6 +1557,34 @@ const WsWorkersWaitRpc = Rpc.make(WS_METHODS.workersWait, {
   error: workerRpcError,
 });
 
+const WsAgentDocumentsReadRpc = Rpc.make(WS_METHODS.agentDocumentsRead, {
+  payload: AgentDocumentReadInput,
+  success: Schema.Array(AgentDocument),
+  error: Schema.Union([AgentDocumentError, EnvironmentAuthorizationError]),
+});
+const WsAgentDocumentsWriteRpc = Rpc.make(WS_METHODS.agentDocumentsWrite, {
+  payload: AgentDocumentWriteInput,
+  success: AgentDocument,
+  error: Schema.Union([AgentDocumentError, EnvironmentAuthorizationError]),
+});
+const WsAgentDocumentsActionRpc = Rpc.make(WS_METHODS.agentDocumentsAction, {
+  payload: AgentDocumentActionInput,
+  success: Schema.Int,
+  error: Schema.Union([AgentDocumentError, EnvironmentAuthorizationError]),
+});
+const WsAgentDocumentsWaitRpc = Rpc.make(WS_METHODS.agentDocumentsWait, {
+  payload: AgentDocumentWaitInput,
+  success: Schema.Array(AgentDocumentAcceptedAction),
+  error: Schema.Union([AgentDocumentError, EnvironmentAuthorizationError]),
+});
+
+export const AgentDocumentsRpcGroup = RpcGroup.make(
+  WsAgentDocumentsReadRpc,
+  WsAgentDocumentsWriteRpc,
+  WsAgentDocumentsActionRpc,
+  WsAgentDocumentsWaitRpc,
+);
+
 export const IntegrationWorkflowRpcGroup = RpcGroup.make(
   Rpc.make(WS_METHODS.memoryGlobalRead, {
     payload: Memory.GlobalMemoryReadInput,
@@ -1572,6 +1616,11 @@ export const ParityToolsRpcGroup = RpcGroup.make(
     success: Quality.QualityRecordChange,
     stream: true,
     error: Schema.Union([Quality.QualityRecordsError, EnvironmentAuthorizationError]),
+  }),
+  Rpc.make(WS_METHODS.agentDocumentsPrepareAsset, {
+    payload: AgentDocumentAssetPrepareInput,
+    success: AgentDocumentAsset,
+    error: Schema.Union([AgentDocumentError, EnvironmentAuthorizationError]),
   }),
   Rpc.make(WS_METHODS.ambientConfigure, {
     payload: Scheduled.AmbientWorkConfigureInput,
@@ -1725,6 +1774,7 @@ export const ParityToolsRpcGroup = RpcGroup.make(
 );
 
 export const WsCoreRpcGroup = RpcGroup.make(
+  ...AgentDocumentsRpcGroup.requests.values(),
   WsWorkersSpawnRpc,
   WsWorkersListRpc,
   WsWorkersGetRpc,

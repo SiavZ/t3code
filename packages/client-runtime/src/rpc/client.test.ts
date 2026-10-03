@@ -21,6 +21,7 @@ import * as Ref from "effect/Ref";
 import * as Stream from "effect/Stream";
 import * as SubscriptionRef from "effect/SubscriptionRef";
 import * as TestClock from "effect/testing/TestClock";
+import { Socket } from "effect/unstable/socket";
 import { RpcClientError } from "effect/unstable/rpc";
 
 import {
@@ -120,6 +121,44 @@ describe("environment RPC", () => {
       yield* Deferred.await(resumed);
       expect(revisions).toEqual([3, 9]);
       yield* Fiber.interrupt(consumer);
+    }),
+  );
+
+  it.effect("does not replay document actions when the transport fails", () =>
+    Effect.gen(function* () {
+      let calls = 0;
+      const client = {
+        [WS_METHODS.agentDocumentsAction]: () =>
+          Effect.suspend(() => {
+            calls += 1;
+            return Effect.fail(
+              new RpcClientError.RpcClientError({
+                reason: new Socket.SocketCloseError({ code: 1006, closeReason: "socket closed" }),
+              }),
+            );
+          }),
+      } as unknown as WsRpcProtocolClient;
+      const { activeSession, supervisor, retryCount } = yield* makeHarness();
+      yield* SubscriptionRef.set(activeSession, Option.some(session(client)));
+      const result = yield* parityOperations.agentDocuments
+        .action({
+          ownerThreadId: ThreadId.make("owner"),
+          projectId: "project",
+          documentId: "document",
+          expectedRevision: 1,
+          actionId: "once",
+          clientId: "client",
+          action: { action: "confirm" },
+          state: {},
+        })
+        .pipe(
+          Effect.provideService(EnvironmentSupervisor.EnvironmentSupervisor, supervisor),
+          Effect.exit,
+        );
+      expect(Exit.isFailure(result)).toBe(true);
+      if (Exit.isFailure(result)) expect(Cause.hasDies(result.cause)).toBe(false);
+      expect(calls).toBe(1);
+      expect(yield* Ref.get(retryCount)).toBe(0);
     }),
   );
 
