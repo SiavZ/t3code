@@ -160,6 +160,14 @@ export const parityOperations = {
     get: unary(WS_METHODS.browserGet),
     cancel: unary(WS_METHODS.browserCancel),
   },
+  sourceDevelopment: {
+    configure: unary(WS_METHODS.sourceDevelopmentConfigure),
+    build: unary(WS_METHODS.sourceDevelopmentBuild),
+    status: unary(WS_METHODS.sourceDevelopmentStatus),
+    wait: unary(WS_METHODS.sourceDevelopmentWait),
+    cancel: unary(WS_METHODS.sourceDevelopmentCancel),
+    requestReload: unary(WS_METHODS.sourceDevelopmentReload),
+  },
   providerDoctor: {
     runApproved: unary(WS_METHODS.providerDoctorRunApproved),
     cancel: unary(WS_METHODS.providerDoctorCancel),

@@ -115,6 +115,7 @@ import * as AmbientWork from "./orchestration/AmbientWork.ts";
 import * as ThreadRuntimeService from "./orchestration/ThreadRuntimeService.ts";
 import * as RuntimeHooks from "./provider/RuntimeHooks.ts";
 import * as ProviderDoctor from "./provider/ProviderDoctor.ts";
+import * as SelfDevelopmentService from "./orchestration/SelfDevelopmentService.ts";
 import * as DesktopAutomationBroker from "./integrations/DesktopAutomationBroker.ts";
 import * as BrowserTaskService from "./integrations/BrowserTaskService.ts";
 import * as WorkflowApprovals from "./integrations/WorkflowApprovals.ts";
@@ -543,6 +544,7 @@ const makeIntegrationWorkflowRpcLayer = (currentSession: EnvironmentAuth.Authent
       const remoteBuild = yield* RemoteBuildService.RemoteBuildService;
       const images = yield* ImageGenerationService.ImageGenerationService;
       const desktop = yield* DesktopAutomationBroker.DesktopAutomationBroker;
+      const sourceDevelopment = yield* SelfDevelopmentService.SelfDevelopmentService;
       const browser = yield* BrowserTaskService.BrowserTaskService;
       const environmentId = yield* (yield* ServerEnvironment.ServerEnvironment).getEnvironmentId;
       const browserAuthority = { environmentId, humanSessionId: currentSessionId };
@@ -555,6 +557,16 @@ const makeIntegrationWorkflowRpcLayer = (currentSession: EnvironmentAuth.Authent
           globalMemory.read(input, { humanSessionId: currentSessionId, admin: true }),
         [WS_METHODS.memoryGlobalWrite]: (input) =>
           globalMemory.write(input, { humanSessionId: currentSessionId, admin: true }),
+        [WS_METHODS.sourceDevelopmentConfigure]: (input) =>
+          sourceDevelopment.configure(input, { trustedOperator: true }),
+        [WS_METHODS.sourceDevelopmentBuild]: (input) =>
+          sourceDevelopment.build(input, { trustedOperator: true }),
+        [WS_METHODS.sourceDevelopmentStatus]: () => sourceDevelopment.status(),
+        [WS_METHODS.sourceDevelopmentWait]: (input) => sourceDevelopment.wait(input.operationId),
+        [WS_METHODS.sourceDevelopmentCancel]: (input) =>
+          sourceDevelopment.cancel(input.operationId, { trustedOperator: true }),
+        [WS_METHODS.sourceDevelopmentReload]: (input) =>
+          sourceDevelopment.requestReload(input.operationId, { trustedOperator: true }),
         [WS_METHODS.desktopConnect]: (input) =>
           Stream.unwrap(desktop.connectForClient(input, currentSessionId, environmentId)),
         [WS_METHODS.desktopAuthorize]: (input) =>
@@ -4386,6 +4398,7 @@ export const websocketRpcRouteLayer = Layer.unwrap(
     const remoteBuild = yield* RemoteBuildService.RemoteBuildService;
     const images = yield* ImageGenerationService.ImageGenerationService;
     const desktop = yield* DesktopAutomationBroker.DesktopAutomationBroker;
+    const sourceDevelopment = yield* SelfDevelopmentService.SelfDevelopmentService;
     const browser = yield* BrowserTaskService.BrowserTaskService;
     const memory = yield* Memory.MemoryService;
     const qualityRecords = yield* QualityRecords.QualityRecords;
@@ -4470,6 +4483,7 @@ export const websocketRpcRouteLayer = Layer.unwrap(
                     Layer.succeed(RemoteBuildService.RemoteBuildService, remoteBuild),
                     Layer.succeed(ImageGenerationService.ImageGenerationService, images),
                     Layer.succeed(DesktopAutomationBroker.DesktopAutomationBroker, desktop),
+                    Layer.succeed(SelfDevelopmentService.SelfDevelopmentService, sourceDevelopment),
                     Layer.succeed(BrowserTaskService.BrowserTaskService, browser),
                   ),
                 ),

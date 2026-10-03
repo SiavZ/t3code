@@ -90,6 +90,23 @@ export const ProviderDoctorResult = Schema.Struct({
   ),
 });
 export type ProviderDoctorResult = typeof ProviderDoctorResult.Type;
+export const SourceBuildProfile = Schema.Struct({
+  id: text(120),
+  checkout: text(4096),
+  artifactDirectory: text(4096),
+  command: text(4096),
+  args: Schema.Array(Schema.String.check(Schema.isMaxLength(4096))).check(Schema.isMaxLength(64)),
+  timeoutMs: Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 600000 })),
+});
+export type SourceBuildProfile = typeof SourceBuildProfile.Type;
+export const SourceBuildInput = Schema.Struct({ profileId: text(120), operationId: text(120) });
+export const SourceBuildReceipt = Schema.Struct({
+  operationId: text(120),
+  profileId: text(120),
+  status: Schema.Literals(["running", "succeeded", "failed", "cancelled"]),
+  detail: Schema.String,
+});
+export type SourceBuildReceipt = typeof SourceBuildReceipt.Type;
 export class RuntimeOperationError extends Schema.TaggedError<RuntimeOperationError>()(
   "RuntimeOperationError",
   {

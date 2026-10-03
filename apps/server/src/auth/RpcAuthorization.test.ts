@@ -87,6 +87,10 @@ describe("RPC authorization scopes", () => {
       WS_METHODS.desktopDisconnect,
       WS_METHODS.desktopLease,
       WS_METHODS.desktopRevoke,
+      WS_METHODS.sourceDevelopmentConfigure,
+      WS_METHODS.sourceDevelopmentBuild,
+      WS_METHODS.sourceDevelopmentCancel,
+      WS_METHODS.sourceDevelopmentReload,
     ])
       expect(requiredScopeForRpcMethod(method)).toBe(AuthAccessWriteScope);
   });

@@ -171,6 +171,7 @@ import * as AgentDocumentAssets from "./orchestration/AgentDocumentAssets.ts";
 import * as ThreadRuntimeService from "./orchestration/ThreadRuntimeService.ts";
 import * as RuntimeHooks from "./provider/RuntimeHooks.ts";
 import * as IntegrationConfiguration from "./integrations/IntegrationConfiguration.ts";
+import * as SelfDevelopmentService from "./orchestration/SelfDevelopmentService.ts";
 import * as RuntimeHookObservers from "./provider/RuntimeHookObservers.ts";
 import * as SharedWorkspaceActivity from "./workspace/SharedWorkspaceActivity.ts";
 import * as ProviderDiagnosticRunner from "./provider/ProviderDiagnosticRunner.ts";
@@ -544,6 +545,7 @@ const ProviderRuntimeLayerLive = ProviderSessionReaperLive.pipe(
       AgentDocumentAssets.layer,
       ThreadRuntimeService.layer,
       RuntimeHooks.layer.pipe(Layer.provide(ProcessRunner.layer)),
+      SelfDevelopmentService.layer.pipe(Layer.provide(ProcessRunner.layer)),
       ProviderDoctor.layer.pipe(
         Layer.provide(WorkflowApprovals.layer),
         Layer.provide(
