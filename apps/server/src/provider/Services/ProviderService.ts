@@ -47,6 +47,12 @@ export interface ProviderServiceShape {
     input: ProviderSessionStartInput,
   ) => Effect.Effect<ProviderSession, ProviderServiceError>;
 
+  /** Internal disposable diagnostics only. No durable thread or resume authority is admitted. */
+  readonly startDiagnosticSession: (
+    threadId: ThreadId,
+    input: ProviderSessionStartInput,
+  ) => Effect.Effect<ProviderSession, ProviderServiceError>;
+
   /**
    * Send a provider turn.
    */

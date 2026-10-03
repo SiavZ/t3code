@@ -69,6 +69,7 @@ export class ThreadBackgroundLivenessService extends Context.Service<
      * "monitoring" only when watch loops are the ONLY live work.
      */
     readonly getThreadBackgroundLiveness: (threadId: string) => ThreadBackgroundLiveness;
+    readonly getLiveThreadIds: () => ReadonlyArray<string>;
   }
 >()("t3/orchestration/ThreadBackgroundLiveness/ThreadBackgroundLivenessService") {}
 
@@ -152,6 +153,8 @@ export function make(): ThreadBackgroundLivenessService["Service"] {
     clearThreadLiveness: (threadId) => {
       stateByThreadId.delete(threadId);
     },
+
+    getLiveThreadIds: () => Array.from(stateByThreadId.keys()),
 
     getThreadBackgroundLiveness: (threadId) => {
       const state = stateByThreadId.get(threadId);

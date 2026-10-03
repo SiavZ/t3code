@@ -3,6 +3,30 @@
   "private": true,
   "type": "module",
   "exports": {
+    "./workers/model": {
+      "types": "./src/workers/model.ts",
+      "default": "./src/workers/model.ts"
+    },
+    "./state/owned-workers": {
+      "types": "./src/state/ownedWorkers.ts",
+      "default": "./src/state/ownedWorkers.ts"
+    },
+    "./operations/parity": {
+      "types": "./src/operations/parity.ts",
+      "default": "./src/operations/parity.ts"
+    },
+    "./operations/agent-tool-settings": {
+      "types": "./src/operations/agentToolSettings.ts",
+      "default": "./src/operations/agentToolSettings.ts"
+    },
+    "./agent-documents/model": {
+      "types": "./src/agentDocuments/model.ts",
+      "default": "./src/agentDocuments/model.ts"
+    },
+    "./state/agent-documents": {
+      "types": "./src/state/agentDocuments.ts",
+      "default": "./src/state/agentDocuments.ts"
+    },
     "./device/stream": {
       "types": "./src/device/stream.ts",
       "default": "./src/device/stream.ts"

@@ -41,7 +41,7 @@ and other phone-only settings ignore the filter.
 ## Defaults and inheritance
 
 General contains the model and workspace for new threads. Integrations controls agent browser
-access. Source Control contains automatic pull, the default pull request merge method and text
+access and optional agent tools. Source Control contains automatic pull, the default pull request merge method and text
 generation. The same rows edit environment defaults or project overrides depending on the
 project crumb.
 
@@ -61,6 +61,44 @@ selected to override it there) to **Top level only** to stop at the ones the rep
 itself, or **Skip** to leave them for a setup script. It resolves in the same order as the
 workspace default: a `"worktreeSubmodules"` value in the `t3.json` of the branch being checked out
 applies when the project and environment are both on **Inherit**.
+
+## Optional agent tools
+
+On web and desktop, open **Settings → Integrations → Agent tools**. On mobile,
+use the agent-tool controls in **Server settings**. Enable only the categories
+needed by the selected projects or environments. New categories start off, and
+project overrides follow the same inheritance rules as other server settings.
+Turning a category on does not configure an external account, approve a paid
+request, or authorize unattended execution.
+
+Enable **Memory** to let an agent maintain and search memories for its project.
+**Automatic memory recall** is a separate opt-in that adds bounded, relevant
+lexical matches to new turns. Turn it off to stop automatic recall while keeping
+saved memories. **Allow global memory** is environment-wide and lets authorized
+clients manage memories shared across projects. It does not grant agents global
+access or enable automatic global recall.
+
+Scheduling, ambient work, and background commands require a separate,
+administrator-issued grant for the owning thread. Tool access alone is not that
+grant. Revoking a grant prevents further work under it; it cannot be replaced by
+an agent choosing a more permissive grant.
+
+External integrations stay unavailable until the environment has their explicit
+configuration and credentials. Sending mail, uploading source for a remote
+build, generating images, and deleting generated images require a fresh review
+of the exact request. Cancelling a local wait does not guarantee cancellation of
+an upstream paid request. Native Mac control additionally requires consent on
+the connected desktop host and stops when that host connection is lost.
+
+## Provider diagnostics
+
+On web and desktop, select a provider instance in **Settings → Providers** to
+run manual diagnostics for that environment. Offline checks use cached state.
+Catalog checks may start a provider process or make network requests. A full
+diagnostic requires an administrator to review the exact provider and model,
+and may consume quota or incur billing. It uses a disposable session rather
+than your conversation. Results describe the checks performed, not a guarantee
+that every native tool or provider feature works.
 
 ## Storage cleanup
 

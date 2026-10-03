@@ -23,6 +23,7 @@ import {
 import {
   DEFAULT_RUNTIME_MODE,
   ModelSelection,
+  OptionalAgentToolCapability,
   ProjectScript,
   RuntimeMode,
 } from "./orchestration.ts";
@@ -41,6 +42,7 @@ import {
   type ProviderDriverKind,
 } from "./providerInstance.ts";
 import { PullRequestMergeMethod } from "./pullRequest.ts";
+import { OptionalIntegrations } from "./integrationWorkflows.ts";
 
 // ── Client Settings (local-only) ───────────────────────────────
 
@@ -1036,6 +1038,8 @@ export const PROJECT_SCOPED_SERVER_SETTING_KEYS = [
   "defaultProjectScripts",
   "enableAgentBrowserAccess",
   "enableAgentDeviceAccess",
+  "agentToolCapabilities",
+  "enableMemoryAutoRecall",
   "textGenerationModelSelection",
   "sourceControlWriterModelSelection",
   "sourceControlWritingStyle",
@@ -1063,6 +1067,10 @@ export const ProjectSettingsOverrides = Schema.Struct({
   defaultProjectScripts: Schema.optionalKey(Schema.Array(ProjectScript)),
   enableAgentBrowserAccess: Schema.optionalKey(Schema.Boolean),
   enableAgentDeviceAccess: Schema.optionalKey(Schema.Boolean),
+  agentToolCapabilities: Schema.optionalKey(
+    Schema.Array(OptionalAgentToolCapability).check(Schema.isMaxLength(9)),
+  ),
+  enableMemoryAutoRecall: Schema.optionalKey(Schema.Boolean),
   textGenerationModelSelection: Schema.optionalKey(ModelSelection),
   sourceControlWriterModelSelection: Schema.optionalKey(Schema.NullOr(ModelSelection)),
   sourceControlWritingStyle: Schema.optionalKey(SourceControlWritingStyleSettings),
@@ -1106,7 +1114,19 @@ export const StorageCleanupSettings = Schema.Struct({
 });
 export type StorageCleanupSettings = typeof StorageCleanupSettings.Type;
 
+export const ExternalHistoryStore = Schema.Struct({
+  source: Schema.Literals(["pi", "opencode"]),
+  path: Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(4096)),
+});
+export type ExternalHistoryStore = typeof ExternalHistoryStore.Type;
+const ExternalHistoryStores = Schema.Array(ExternalHistoryStore).check(Schema.isMaxLength(10));
+
 export const ServerSettings = Schema.Struct({
+  externalHistoryStores: ExternalHistoryStores.pipe(Schema.withDecodingDefault(Effect.succeed([]))),
+  enableGlobalMemory: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
+  optionalIntegrations: OptionalIntegrations.pipe(
+    Schema.withDecodingDefault(Effect.succeed(Schema.decodeSync(OptionalIntegrations)({}))),
+  ),
   worktreeCleanup: WorktreeCleanup.pipe(Schema.withDecodingDefault(Effect.succeed(null))),
   storageCleanup: StorageCleanupSettings.pipe(
     Schema.withDecodingDefault(Effect.succeed(Schema.decodeSync(StorageCleanupSettings)({}))),
@@ -1135,6 +1155,10 @@ export const ServerSettings = Schema.Struct({
    * between a desktop window and a phone attached to the same server.
    */
   enableAgentBrowserAccess: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
+  agentToolCapabilities: Schema.Array(OptionalAgentToolCapability)
+    .check(Schema.isMaxLength(9))
+    .pipe(Schema.withDecodingDefault(Effect.succeed([]))),
+  enableMemoryAutoRecall: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
   projectAgentBrowserAccessOverrides: Schema.Record(ProjectId, Schema.Boolean).pipe(
     Schema.withDecodingDefault(Effect.succeed({})),
   ),
@@ -1495,10 +1519,17 @@ export const ServerSettingsPatch = Schema.Struct({
     }),
   ),
   // Server settings
+  externalHistoryStores: Schema.optionalKey(ExternalHistoryStores),
+  enableGlobalMemory: Schema.optionalKey(Schema.Boolean),
+  optionalIntegrations: Schema.optionalKey(OptionalIntegrations),
   responseStreamingMode: Schema.optionalKey(ResponseStreamingMode),
   enableProviderUpdateChecks: Schema.optionalKey(Schema.Boolean),
   continueThreadsAfterServerUpdate: Schema.optionalKey(Schema.Boolean),
   enableAgentBrowserAccess: Schema.optionalKey(Schema.Boolean),
+  agentToolCapabilities: Schema.optionalKey(
+    Schema.Array(OptionalAgentToolCapability).check(Schema.isMaxLength(9)),
+  ),
+  enableMemoryAutoRecall: Schema.optionalKey(Schema.Boolean),
   projectAgentBrowserAccessOverrides: Schema.optionalKey(
     Schema.Record(ProjectId, Schema.NullOr(Schema.Boolean)),
   ),

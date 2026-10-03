@@ -15,6 +15,20 @@ import {
 } from "../Services/ProviderSessionDirectory.ts";
 const decodeProviderDriverKindValue = Schema.decodeUnknownEffect(ProviderDriverKind);
 
+/** Only an explicitly stopped thread binding may be discarded for a fresh native epoch. */
+export const clearStoppedRuntimeBinding = Effect.fn("clearStoppedRuntimeBinding")(function* (
+  threadId: ThreadId,
+) {
+  const repository = yield* ProviderSessionRuntime.ProviderSessionRuntimeRepository;
+  const existing = yield* repository.getByThreadId({ threadId });
+  if (Option.isSome(existing) && existing.value.status !== "stopped")
+    return yield* new ProviderValidationError({
+      operation: "runtime.handoff",
+      issue: "Native runtime binding is not stopped.",
+    });
+  yield* repository.deleteByThreadId({ threadId });
+});
+
 function toPersistenceError(operation: string) {
   return (cause: unknown) =>
     new ProviderSessionDirectoryPersistenceError({

@@ -419,6 +419,11 @@ describe("OrchestrationEngine", () => {
     const layer = OrchestrationEngineLive.pipe(
       Layer.provide(
         Layer.succeed(ProjectionSnapshotQuery, {
+          getThreadActivationAuthority: () => Effect.succeed(Option.none()),
+          getWorkerSpawnMetadata: () => Effect.die("unused"),
+          getWorkerAdmissionStates: () => Effect.die("unused"),
+          getWorkerState: () => Effect.die("unused"),
+          listWorkerStates: () => Effect.die("unused"),
           getUserInputActivity: () => Effect.die("unused"),
           listActivitiesByKind: () => Effect.die("unused"),
           getCommandReadModel: () => Effect.succeed(commandReadModel),

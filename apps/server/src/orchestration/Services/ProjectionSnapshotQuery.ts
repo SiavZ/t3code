@@ -26,6 +26,8 @@ import type {
   OrchestrationThreadShell,
   ProjectId,
   ThreadId,
+  ThreadUnattendedAuthority,
+  ThreadWorkerMetadata,
 } from "@t3tools/contracts";
 import * as Context from "effect/Context";
 import type * as Option from "effect/Option";
@@ -71,6 +73,8 @@ export type ProjectionThreadPullRequests = Pick<
 >;
 
 export interface ProjectionThreadDetailQuery {
+  readonly boundedConversation?: boolean;
+  readonly includeHistoryArtifacts?: boolean;
   /**
    * Limit activities before SQLite returns and decodes their payloads.
    * Any explicit filter omits pinned-request reads. An empty list also skips
@@ -82,7 +86,28 @@ export interface ProjectionThreadDetailQuery {
 /**
  * ProjectionSnapshotQueryShape - Service API for read-model snapshots.
  */
+export interface WorkerThreadState {
+  readonly thread: OrchestrationThreadShell;
+  readonly pendingMessageId: MessageId | null;
+}
+
 export interface ProjectionSnapshotQueryShape {
+  readonly getThreadActivationAuthority: (
+    threadId: ThreadId,
+  ) => Effect.Effect<Option.Option<ThreadUnattendedAuthority>, ProjectionRepositoryError>;
+  readonly getWorkerSpawnMetadata: (
+    threadId: ThreadId,
+  ) => Effect.Effect<Option.Option<ThreadWorkerMetadata>, ProjectionRepositoryError>;
+  readonly getWorkerAdmissionStates: (
+    backgroundThreadIds: ReadonlyArray<ThreadId>,
+  ) => Effect.Effect<ReadonlyArray<WorkerThreadState>, ProjectionRepositoryError>;
+  readonly getWorkerState: (
+    threadId: ThreadId,
+  ) => Effect.Effect<Option.Option<WorkerThreadState>, ProjectionRepositoryError>;
+  readonly listWorkerStates: (input: {
+    readonly rootThreadId?: ThreadId;
+    readonly ownerThreadId?: ThreadId;
+  }) => Effect.Effect<ReadonlyArray<WorkerThreadState>, ProjectionRepositoryError>;
   /** Read the latest request or resolution without loading the thread history. */
   readonly getUserInputActivity: (input: {
     readonly threadId: ThreadId;
@@ -256,7 +281,8 @@ export interface ProjectionSnapshotQueryShape {
     threadId: ThreadId,
   ) => Effect.Effect<
     Option.Option<
-      Pick<OrchestrationThreadShell, "id" | "projectId" | "title" | "titleState" | "session">
+      Pick<OrchestrationThreadShell, "id" | "projectId" | "title" | "titleState" | "session"> &
+        Pick<OrchestrationThread, "runtimeEpochId" | "runtimeHandoff">
     >,
     ProjectionRepositoryError
   >;
@@ -303,6 +329,7 @@ export interface ProjectionSnapshotQueryShape {
   readonly getThreadDetailSnapshot: (
     threadId: ThreadId,
     window?: OrchestrationThreadDetailWindow,
+    query?: ProjectionThreadDetailQuery,
   ) => Effect.Effect<Option.Option<OrchestrationThreadDetailSnapshot>, ProjectionRepositoryError>;
 }
 

@@ -21,6 +21,7 @@ import * as Ref from "effect/Ref";
 import * as Stream from "effect/Stream";
 import * as SubscriptionRef from "effect/SubscriptionRef";
 import * as TestClock from "effect/testing/TestClock";
+import { Socket } from "effect/unstable/socket";
 import { RpcClientError } from "effect/unstable/rpc";
 
 import {
@@ -32,6 +33,7 @@ import {
 import * as EnvironmentSupervisor from "../connection/supervisor.ts";
 import * as RpcSession from "../rpc/session.ts";
 import type { WsRpcProtocolClient } from "../rpc/protocol.ts";
+import { parityOperations } from "../operations/parity.ts";
 import {
   EnvironmentRpcRequestObserver,
   request,
@@ -91,6 +93,126 @@ const makeHarness = Effect.fn("TestEnvironmentRpc.makeHarness")(function* () {
 });
 
 describe("environment RPC", () => {
+  it.effect.each(["disconnect", "replacement"] as const)(
+    "ends native host registration on session %s without carrying consent forward",
+    (change) =>
+      Effect.gen(function* () {
+        const registered = yield* Deferred.make<void>();
+        const released = yield* Deferred.make<void>();
+        let registrations = 0;
+        let replacementRegistrations = 0;
+        const firstClient = {
+          [WS_METHODS.desktopConnect]: () =>
+            Stream.suspend(() => {
+              registrations += 1;
+              return Stream.unwrap(
+                Deferred.succeed(registered, undefined).pipe(Effect.as(Stream.never)),
+              ).pipe(Stream.ensuring(Deferred.succeed(released, undefined)));
+            }),
+        } as unknown as WsRpcProtocolClient;
+        const replacementClient = {
+          [WS_METHODS.desktopConnect]: () =>
+            Stream.suspend(() => {
+              replacementRegistrations += 1;
+              return Stream.never;
+            }),
+        } as unknown as WsRpcProtocolClient;
+        const { activeSession, supervisor } = yield* makeHarness();
+        yield* SubscriptionRef.set(activeSession, Option.some(session(firstClient)));
+        const consumer = yield* parityOperations.desktopAutomation
+          .connectOnce({
+            environmentId: TARGET.environmentId,
+            hostId: "native-host",
+            displayName: "Native host",
+            generation: "human-consent-once",
+            operations: ["observe"],
+          })
+          .pipe(
+            Stream.runDrain,
+            Effect.provideService(EnvironmentSupervisor.EnvironmentSupervisor, supervisor),
+            Effect.forkChild,
+          );
+        yield* Deferred.await(registered);
+        yield* SubscriptionRef.set(
+          activeSession,
+          change === "disconnect" ? Option.none() : Option.some(session(replacementClient)),
+        );
+        yield* Fiber.join(consumer);
+        yield* Deferred.await(released);
+        expect(registrations).toBe(1);
+        expect(replacementRegistrations).toBe(0);
+      }),
+  );
+
+  it.effect("refreshes quality revision metadata from the replacement environment session", () =>
+    Effect.gen(function* () {
+      const firstSeen = yield* Deferred.make<void>();
+      const resumed = yield* Deferred.make<void>();
+      const revisions: number[] = [];
+      const threadId = ThreadId.make("quality-thread");
+      const { activeSession, supervisor } = yield* makeHarness();
+      const clientAt = (revision: number) =>
+        ({
+          [WS_METHODS.qualitySubscribeChanges]: () =>
+            Stream.succeed({ threadId, revision }).pipe(Stream.concat(Stream.never)),
+        }) as unknown as WsRpcProtocolClient;
+      yield* SubscriptionRef.set(activeSession, Option.some(session(clientAt(3))));
+      const consumer = yield* parityOperations.quality.subscribeChanges({ threadId }).pipe(
+        Stream.runForEach(({ revision }) => {
+          revisions.push(revision);
+          return revision === 3
+            ? Deferred.succeed(firstSeen, undefined)
+            : Deferred.succeed(resumed, undefined);
+        }),
+        Effect.provideService(EnvironmentSupervisor.EnvironmentSupervisor, supervisor),
+        Effect.forkChild,
+      );
+      yield* Deferred.await(firstSeen);
+      yield* SubscriptionRef.set(activeSession, Option.some(session(clientAt(9))));
+      yield* Deferred.await(resumed);
+      expect(revisions).toEqual([3, 9]);
+      yield* Fiber.interrupt(consumer);
+    }),
+  );
+
+  it.effect("does not replay document actions when the transport fails", () =>
+    Effect.gen(function* () {
+      let calls = 0;
+      const client = {
+        [WS_METHODS.agentDocumentsAction]: () =>
+          Effect.suspend(() => {
+            calls += 1;
+            return Effect.fail(
+              new RpcClientError.RpcClientError({
+                reason: new Socket.SocketCloseError({ code: 1006, closeReason: "socket closed" }),
+              }),
+            );
+          }),
+      } as unknown as WsRpcProtocolClient;
+      const { activeSession, supervisor, retryCount } = yield* makeHarness();
+      yield* SubscriptionRef.set(activeSession, Option.some(session(client)));
+      const result = yield* parityOperations.agentDocuments
+        .action({
+          ownerThreadId: ThreadId.make("owner"),
+          projectId: "project",
+          documentId: "document",
+          expectedRevision: 1,
+          actionId: "once",
+          clientId: "client",
+          action: { action: "confirm" },
+          state: {},
+        })
+        .pipe(
+          Effect.provideService(EnvironmentSupervisor.EnvironmentSupervisor, supervisor),
+          Effect.exit,
+        );
+      expect(Exit.isFailure(result)).toBe(true);
+      if (Exit.isFailure(result)) expect(Cause.hasDies(result.cause)).toBe(false);
+      expect(calls).toBe(1);
+      expect(yield* Ref.get(retryCount)).toBe(0);
+    }),
+  );
+
   it.effect("registers a fresh preview host after completion without replaying requests", () =>
     Effect.gen(function* () {
       const firstCompleted = yield* Deferred.make<void>();

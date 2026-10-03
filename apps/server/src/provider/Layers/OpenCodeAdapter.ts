@@ -337,6 +337,7 @@ type OpenCodeTextPartState = Pick<OpenCodeTextPart, "id" | "messageID" | "type" 
 type OpenCodeStepUsage = Pick<Extract<Part, { readonly type: "step-finish" }>, "id" | "tokens">;
 
 interface OpenCodeSessionContext {
+  readonly runtimeEpochId: string | undefined;
   session: ProviderSession;
   readonly client: OpencodeClient;
   readonly server: OpenCodeServerConnection;
@@ -1076,13 +1077,13 @@ export function makeOpenCodeAdapter(
       }).pipe(Effect.ensuring(Queue.shutdown(runtimeEvents))),
     );
 
-    const emit = (event: ProviderRuntimeEvent) =>
-      Queue.offer(runtimeEvents, event).pipe(Effect.asVoid);
+    const emit = (runtimeEpochId: string | undefined, event: ProviderRuntimeEvent) =>
+      Queue.offer(runtimeEvents, { ...event, runtimeEpochId }).pipe(Effect.asVoid);
     // Synchronous publish for callers that must not yield between a state
     // check and the enqueue, e.g. reopening an approval only if its terminal
     // event has not landed yet.
-    const emitUnsafe = (event: ProviderRuntimeEvent) => {
-      Queue.offerUnsafe(runtimeEvents, event);
+    const emitUnsafe = (runtimeEpochId: string | undefined, event: ProviderRuntimeEvent) => {
+      Queue.offerUnsafe(runtimeEvents, { ...event, runtimeEpochId });
     };
     const writeNativeEvent = (
       threadId: ThreadId,
@@ -1153,7 +1154,7 @@ export function makeOpenCodeAdapter(
         yield* Fiber.interrupt(pendingIdleReconciliation.fiber);
       }
       yield* schedulePendingRequestRecovery(context);
-      yield* emit({
+      yield* emit(context.runtimeEpochId, {
         ...(yield* buildEventBase({
           threadId: context.session.threadId,
           turnId,
@@ -1245,7 +1246,7 @@ export function makeOpenCodeAdapter(
           }
           if (!pending.warned) {
             pending.warned = true;
-            yield* emit({
+            yield* emit(context.runtimeEpochId, {
               ...(yield* buildEventBase({ threadId: context.session.threadId, turnId })),
               type: "runtime.warning",
               payload: {
@@ -1312,7 +1313,7 @@ export function makeOpenCodeAdapter(
         { status: "error", lastError: detail },
         { clearActiveTurnId: true },
       );
-      yield* emit({
+      yield* emit(context.runtimeEpochId, {
         ...(yield* buildEventBase({
           threadId: context.session.threadId,
           turnId: promptAdmission.turnId,
@@ -1325,7 +1326,7 @@ export function makeOpenCodeAdapter(
           tokenUsage,
         },
       });
-      yield* emit({
+      yield* emit(context.runtimeEpochId, {
         ...(yield* buildEventBase({
           threadId: context.session.threadId,
           turnId: promptAdmission.turnId,
@@ -1536,7 +1537,7 @@ export function makeOpenCodeAdapter(
         );
       }
       yield* clearPendingOpenCodeRequests(context, { type: "session.abort" });
-      yield* emit({
+      yield* emit(context.runtimeEpochId, {
         ...(yield* buildEventBase({
           threadId: context.session.threadId,
           turnId,
@@ -1583,7 +1584,7 @@ export function makeOpenCodeAdapter(
       // run this inside a fiber forked via `Effect.forkIn(context.sessionScope)`;
       // closing that scope triggers the fiber-interrupt finalizer, so any
       // subsequent yield point would unwind and silently drop these emits.
-      yield* emit({
+      yield* emit(context.runtimeEpochId, {
         ...(yield* buildEventBase({
           threadId: context.session.threadId,
           turnId,
@@ -1594,7 +1595,7 @@ export function makeOpenCodeAdapter(
           class: "transport_error",
         },
       }).pipe(Effect.ignore);
-      yield* emit({
+      yield* emit(context.runtimeEpochId, {
         ...(yield* buildEventBase({
           threadId: context.session.threadId,
           turnId,
@@ -1627,7 +1628,7 @@ export function makeOpenCodeAdapter(
       part.emittedText = latestText;
       part.text = latestText;
       if (deltaToEmit.length > 0) {
-        yield* emit({
+        yield* emit(context.runtimeEpochId, {
           ...(yield* buildEventBase({
             threadId: context.session.threadId,
             turnId,
@@ -1645,7 +1646,7 @@ export function makeOpenCodeAdapter(
 
       if (part.type === "text" && part.time?.end !== undefined && !part.completed) {
         part.completed = true;
-        yield* emit({
+        yield* emit(context.runtimeEpochId, {
           ...(yield* buildEventBase({
             threadId: context.session.threadId,
             turnId,
@@ -1754,7 +1755,7 @@ export function makeOpenCodeAdapter(
           : [request.permission.replaceAll("_", " "), ...patterns].join("\n");
       context.autoRepliedRequestIds.delete(request.id);
       context.pendingPermissions.set(request.id, request);
-      emitUnsafe({
+      emitUnsafe(context.runtimeEpochId, {
         ...base,
         type: "request.opened",
         payload: {
@@ -1849,7 +1850,7 @@ export function makeOpenCodeAdapter(
         return;
       }
       context.pendingQuestions.set(request.id, request);
-      emitUnsafe({
+      emitUnsafe(context.runtimeEpochId, {
         ...base,
         type: "user-input.requested",
         payload: { questions: normalizeQuestionRequest(request) },
@@ -1892,7 +1893,7 @@ export function makeOpenCodeAdapter(
       if (event.type === "permission.replied") {
         const request = context.pendingPermissions.get(requestId);
         context.pendingPermissions.delete(requestId);
-        emitUnsafe({
+        emitUnsafe(context.runtimeEpochId, {
           ...base,
           type: "request.resolved",
           payload: {
@@ -1914,7 +1915,7 @@ export function makeOpenCodeAdapter(
               ]),
             )
           : {};
-      emitUnsafe({
+      emitUnsafe(context.runtimeEpochId, {
         ...base,
         type: "user-input.resolved",
         payload: { answers },
@@ -1939,7 +1940,7 @@ export function makeOpenCodeAdapter(
         if (context.emittedTerminalRequestIds.has(request.id)) continue;
         context.pendingPermissions.delete(request.id);
         context.emittedTerminalRequestIds.add(request.id);
-        emitUnsafe({
+        emitUnsafe(context.runtimeEpochId, {
           ...base,
           type: "request.resolved",
           payload: { requestType: mapPermissionToRequestType(request.permission) },
@@ -1957,7 +1958,11 @@ export function makeOpenCodeAdapter(
         if (context.emittedTerminalRequestIds.has(request.id)) continue;
         context.pendingQuestions.delete(request.id);
         context.emittedTerminalRequestIds.add(request.id);
-        emitUnsafe({ ...base, type: "user-input.resolved", payload: { answers: {} } });
+        emitUnsafe(context.runtimeEpochId, {
+          ...base,
+          type: "user-input.resolved",
+          payload: { answers: {} },
+        });
       }
     });
 
@@ -2024,7 +2029,7 @@ export function makeOpenCodeAdapter(
           }
           if (!retry.warned) {
             retry.warned = true;
-            yield* emit({
+            yield* emit(context.runtimeEpochId, {
               ...(yield* buildEventBase({
                 threadId: context.session.threadId,
                 requestId,
@@ -2094,7 +2099,7 @@ export function makeOpenCodeAdapter(
           if (responses.type === "failure") {
             if (!recovery.warned) {
               recovery.warned = true;
-              yield* emit({
+              yield* emit(context.runtimeEpochId, {
                 ...(yield* buildEventBase({ threadId: context.session.threadId })),
                 type: "runtime.warning",
                 payload: {
@@ -2113,7 +2118,7 @@ export function makeOpenCodeAdapter(
           if (permissions === undefined || questions === undefined) {
             if (!recovery.warned) {
               recovery.warned = true;
-              yield* emit({
+              yield* emit(context.runtimeEpochId, {
                 ...(yield* buildEventBase({ threadId: context.session.threadId })),
                 type: "runtime.warning",
                 payload: {
@@ -2295,7 +2300,7 @@ export function makeOpenCodeAdapter(
         case "session.updated": {
           const title = openCodeEventSessionTitle(event);
           if (title) {
-            yield* emit({
+            yield* emit(context.runtimeEpochId, {
               ...(yield* buildEventBase({
                 threadId: context.session.threadId,
                 raw: event,
@@ -2312,7 +2317,7 @@ export function makeOpenCodeAdapter(
           break;
         }
         case "session.compacted": {
-          yield* emit({
+          yield* emit(context.runtimeEpochId, {
             ...(yield* buildEventBase({
               threadId: context.session.threadId,
               turnId,
@@ -2430,7 +2435,7 @@ export function makeOpenCodeAdapter(
           }
           existingPart.emittedText = nextText;
           existingPart.text = nextText;
-          yield* emit({
+          yield* emit(context.runtimeEpochId, {
             ...(yield* buildEventBase({
               threadId: context.session.threadId,
               turnId,
@@ -2527,7 +2532,7 @@ export function makeOpenCodeAdapter(
                     : "item.updated",
               payload,
             };
-            yield* emit(runtimeEvent);
+            yield* emit(context.runtimeEpochId, runtimeEvent);
           }
           break;
         }
@@ -2566,7 +2571,7 @@ export function makeOpenCodeAdapter(
           });
           // Session-wide task updates must not reopen progress after a turn ends.
           if (context.activeTurnId !== turnId) break;
-          emitUnsafe({
+          emitUnsafe(context.runtimeEpochId, {
             ...base,
             type: "turn.plan.updated",
             payload: {
@@ -2604,7 +2609,7 @@ export function makeOpenCodeAdapter(
           }
 
           if (event.properties.status.type === "retry") {
-            yield* emit({
+            yield* emit(context.runtimeEpochId, {
               ...(yield* buildEventBase({
                 threadId: context.session.threadId,
                 turnId,
@@ -2686,7 +2691,7 @@ export function makeOpenCodeAdapter(
             { clearActiveTurnId: true },
           );
           if (activeTurnId) {
-            yield* emit({
+            yield* emit(context.runtimeEpochId, {
               ...(yield* buildEventBase({
                 threadId: context.session.threadId,
                 turnId: activeTurnId,
@@ -2700,7 +2705,7 @@ export function makeOpenCodeAdapter(
               },
             });
           }
-          yield* emit({
+          yield* emit(context.runtimeEpochId, {
             ...(yield* buildEventBase({
               threadId: context.session.threadId,
               raw: event,
@@ -2741,7 +2746,7 @@ export function makeOpenCodeAdapter(
           Effect.gen(function* () {
             if (warnedAboutDisconnect) return;
             warnedAboutDisconnect = true;
-            yield* emit({
+            yield* emit(context.runtimeEpochId, {
               ...(yield* buildEventBase({
                 threadId: context.session.threadId,
                 turnId: context.activeTurnId,
@@ -2985,6 +2990,7 @@ export function makeOpenCodeAdapter(
 
         const createdAt = yield* nowIso;
         const session: ProviderSession = {
+          runtimeEpochId: input.runtimeEpochId,
           provider: PROVIDER,
           providerInstanceId: boundInstanceId,
           status: "connecting",
@@ -3004,6 +3010,7 @@ export function makeOpenCodeAdapter(
         };
 
         const context: OpenCodeSessionContext = {
+          runtimeEpochId: input.runtimeEpochId,
           session,
           client: started.client,
           server: started.server,
@@ -3074,14 +3081,14 @@ export function makeOpenCodeAdapter(
           yield* schedulePendingRequestRecovery(context);
         }
 
-        yield* emit({
+        yield* emit(context.runtimeEpochId, {
           ...(yield* buildEventBase({ threadId: input.threadId })),
           type: "session.started",
           payload: {
             message: "OpenCode session started",
           },
         });
-        yield* emit({
+        yield* emit(context.runtimeEpochId, {
           ...(yield* buildEventBase({ threadId: input.threadId })),
           type: "thread.started",
           payload: {
@@ -3224,7 +3231,7 @@ export function makeOpenCodeAdapter(
           );
 
           if (steeringTurnId === undefined) {
-            yield* emit({
+            yield* emit(context.runtimeEpochId, {
               ...(yield* buildEventBase({ threadId: input.threadId, turnId })),
               type: "turn.started",
               payload: {
@@ -3326,7 +3333,7 @@ export function makeOpenCodeAdapter(
                   context.promptGeneration !== promptAdmission.generation)
               ) {
                 return Effect.gen(function* () {
-                  yield* emit({
+                  yield* emit(context.runtimeEpochId, {
                     ...(yield* buildEventBase({ threadId: input.threadId, turnId })),
                     type: "runtime.warning",
                     payload: {
@@ -3366,7 +3373,7 @@ export function makeOpenCodeAdapter(
                         },
                         { clearActiveTurnId: true },
                       );
-                      yield* emit({
+                      yield* emit(context.runtimeEpochId, {
                         ...(yield* buildEventBase({ threadId: input.threadId, turnId })),
                         type: "turn.aborted",
                         payload: {
@@ -3385,7 +3392,7 @@ export function makeOpenCodeAdapter(
                       ).pipe(Effect.timeout("1 second")),
                     );
                     if (Exit.isFailure(cleanupExit)) {
-                      yield* emit({
+                      yield* emit(context.runtimeEpochId, {
                         ...(yield* buildEventBase({ threadId: input.threadId, turnId })),
                         type: "runtime.warning",
                         payload: {
@@ -3416,7 +3423,7 @@ export function makeOpenCodeAdapter(
                       },
                       { clearActiveTurnId: true },
                     );
-                    yield* emit({
+                    yield* emit(context.runtimeEpochId, {
                       ...(yield* buildEventBase({
                         threadId: input.threadId,
                         turnId,
@@ -3875,7 +3882,7 @@ export function makeOpenCodeAdapter(
         if (!stopped) {
           return;
         }
-        yield* emit({
+        yield* emit(context.runtimeEpochId, {
           ...(yield* buildEventBase({ threadId })),
           type: "session.exited",
           payload: {
@@ -3999,7 +4006,7 @@ export function makeOpenCodeAdapter(
             resumeCursor: { schemaVersion: OPENCODE_RESUME_VERSION, sessionId: forkedSessionId },
             updatedAt: yield* nowIso,
           };
-          yield* emit({
+          yield* emit(context.runtimeEpochId, {
             ...(yield* buildEventBase({ threadId })),
             type: "thread.started",
             payload: { providerThreadId: forkedSessionId },

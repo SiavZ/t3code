@@ -6,6 +6,7 @@ import {
   type ProjectScopedServerSettingKey,
   type ServerSettings,
   type ServerSettingsPatch,
+  type OptionalAgentToolCapability,
 } from "@t3tools/contracts";
 import {
   clearProjectSettingsOverrides,
@@ -13,6 +14,40 @@ import {
 } from "@t3tools/shared/projectSettings";
 
 import type { SettingsTarget } from "./settings-environment-filter";
+import { setOptionalAgentToolCapability } from "@t3tools/client-runtime/operations/agent-tool-settings";
+
+export function planMobileAgentToolCapability(
+  targets: readonly ScopedMobileSettingsTarget[],
+  projectSelected: boolean,
+  capability: OptionalAgentToolCapability,
+  enabled: boolean,
+) {
+  const writes = new Map<EnvironmentId, ServerSettingsPatch>();
+  for (const target of targets) {
+    const planned = planMobileScopedSettingsPatch([target], projectSelected, {
+      agentToolCapabilities: setOptionalAgentToolCapability(
+        target.settings.agentToolCapabilities,
+        capability,
+        enabled,
+      ),
+    });
+    for (const write of planned) {
+      const previous = writes.get(write.environmentId);
+      writes.set(
+        write.environmentId,
+        projectSelected
+          ? {
+              projectSettingsOverrides: {
+                ...previous?.projectSettingsOverrides,
+                ...write.patch.projectSettingsOverrides,
+              },
+            }
+          : write.patch,
+      );
+    }
+  }
+  return [...writes].map(([environmentId, patch]) => ({ environmentId, patch }));
+}
 
 export interface ScopedMobileSettingsTarget {
   readonly environment: SettingsTarget;

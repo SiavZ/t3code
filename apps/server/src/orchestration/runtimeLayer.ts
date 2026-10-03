@@ -7,6 +7,9 @@ import { OrchestrationProjectionPipelineLive } from "./Layers/ProjectionPipeline
 import { OrchestrationProjectionSnapshotQueryLive } from "./Layers/ProjectionSnapshotQuery.ts";
 import * as ThreadBackgroundLiveness from "./ThreadBackgroundLiveness.ts";
 import * as ThreadPlanProgress from "./ThreadPlanProgress.ts";
+import * as CoordinationPlans from "./CoordinationPlans.ts";
+import * as CoordinationPlanStore from "./CoordinationPlanStore.ts";
+import * as CoordinationReactor from "./CoordinationReactor.ts";
 
 const OrchestrationEventInfrastructureLayerLive = Layer.mergeAll(
   OrchestrationEventStoreLive,
@@ -30,7 +33,12 @@ const OrchestrationInfrastructureLayerLive = Layer.mergeAll(
   Layer.provideMerge(ThreadPlanProgress.layer),
 );
 
-export const OrchestrationLayerLive = Layer.mergeAll(
+const OrchestrationCoreLayerLive = Layer.mergeAll(
   OrchestrationInfrastructureLayerLive,
   OrchestrationEngineLive.pipe(Layer.provide(OrchestrationInfrastructureLayerLive)),
 );
+
+export const OrchestrationLayerLive = Layer.mergeAll(
+  CoordinationPlans.layer.pipe(Layer.provide(CoordinationPlanStore.layer)),
+  CoordinationReactor.layer,
+).pipe(Layer.provideMerge(OrchestrationCoreLayerLive));

@@ -41,6 +41,45 @@ in a new thread's model picker to add or remove them. A regular click returns to
 single model. Choose a base branch and send. Each selection starts a separate thread
 and worktree while you stay in the new thread composer. This requires a Git project.
 
+## Delegate work to an agent
+
+Ask the agent in a thread to delegate a task to a T3 worker. It can choose a
+configured provider and model, check progress, read the result, and stop the
+worker. Workers appear as regular threads on your connected clients. Open
+**Workers** in the owning thread to inspect their status and recent result,
+wait for work to settle, or request a stop. Older workers remain in the thread
+list when the bounded worker view is full.
+
+A worker shares its owner's project and working directory. Give workers separate
+files or read-only tasks when running them together. They do not receive isolated
+worktrees automatically, so avoid concurrent Git operations or file restores.
+
+Up to four workers can be active under one root thread, with sixteen across the
+environment. A worker can delegate one level further. Follow-ups are accepted
+only after the worker's current work has settled, including approvals and native
+background tasks. Stopping cancels its current work without deleting the thread;
+the owner can send another task after cancellation finishes. Deleting an owner
+cancels its descendants' work but keeps their thread histories. If a server
+restart interrupts a queued worker, send an explicit follow-up to continue.
+
+These workers are separate from a provider's own subagents. They require a
+provider session with T3's agent tools enabled.
+
+For dependent tasks, ask the agent to create a coordination plan with explicit
+prerequisites and review gates. Workers can exchange stored messages and report
+results to the plan, but a stored message does not inject a prompt into a busy
+native session. A cancelled or interrupted attempt needs an explicit retry.
+
+## Agent documents
+
+Enable **Agent documents** in the project's agent-tool settings, then ask the
+agent for an interactive document, Markdown report, or PDF from the project.
+Open **Documents** in the thread to use it. Actions belong to that document's
+owning thread, not whichever thread you select later, and sending a prompt does
+not replace your composer draft. Reconnect before submitting actions. Closed
+documents can be reopened; ephemeral documents close when their owning work
+ends or the server restarts.
+
 ## Pin and reorder threads
 
 Pin a thread from its menu to keep it above your active work.

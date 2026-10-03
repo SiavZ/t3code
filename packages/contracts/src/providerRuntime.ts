@@ -200,6 +200,7 @@ const RuntimeWarningType = Schema.Literal("runtime.warning");
 const RuntimeErrorType = Schema.Literal("runtime.error");
 
 const ProviderRuntimeEventBase = Schema.Struct({
+  runtimeEpochId: Schema.optional(Schema.String),
   eventId: EventId,
   provider: ProviderDriverKind,
   // Optional during the driver/instance migration. See providerInstance.ts

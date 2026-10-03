@@ -78,7 +78,11 @@ import {
   type TerminalMetadataStreamEvent,
   type PullRequestRef,
   WS_METHODS,
+  RuntimeOperationError,
   WsRpcGroup,
+  WsCoreRpcGroup,
+  ParityToolsRpcGroup,
+  IntegrationWorkflowRpcGroup,
   WORKTREE_SETUP_ACTIVITY_KIND,
   worktreeSetupActivityId,
   type WorktreeSetupSnapshot,
@@ -104,6 +108,32 @@ import {
   normalizeDispatchCommand,
 } from "./orchestration/Normalizer.ts";
 import * as OrchestrationEngine from "./orchestration/Services/OrchestrationEngine.ts";
+import * as OwnedWorkers from "./orchestration/OwnedWorkers.ts";
+import * as AgentDocuments from "./orchestration/AgentDocuments.ts";
+import * as AgentDocumentAssets from "./orchestration/AgentDocumentAssets.ts";
+import * as AmbientWork from "./orchestration/AmbientWork.ts";
+import * as ThreadRuntimeService from "./orchestration/ThreadRuntimeService.ts";
+import * as RuntimeHooks from "./provider/RuntimeHooks.ts";
+import * as ProviderDoctor from "./provider/ProviderDoctor.ts";
+import * as SelfDevelopmentService from "./orchestration/SelfDevelopmentService.ts";
+import * as DesktopAutomationBroker from "./integrations/DesktopAutomationBroker.ts";
+import * as BrowserTaskService from "./integrations/BrowserTaskService.ts";
+import * as WorkflowApprovals from "./integrations/WorkflowApprovals.ts";
+import * as IntegrationCatalog from "./integrations/IntegrationCatalog.ts";
+import * as GmailService from "./integrations/GmailService.ts";
+import * as GlobalMemory from "./memory/GlobalMemory.ts";
+import * as RemoteBuildService from "./integrations/RemoteBuildService.ts";
+import * as ImageGenerationService from "./integrations/ImageGenerationService.ts";
+import * as Memory from "./memory/Memory.ts";
+import * as QualityRecords from "./orchestration/QualityRecords.ts";
+import * as ScheduledWork from "./orchestration/ScheduledWork.ts";
+import * as UnattendedGrants from "./orchestration/UnattendedGrants.ts";
+import * as BackgroundJobs from "./background/BackgroundJobs.ts";
+import * as CoordinationPlans from "./orchestration/CoordinationPlans.ts";
+import * as WorkspaceAgentSearch from "./workspace/WorkspaceAgentSearch.ts";
+import * as HistorySearch from "./project/HistorySearch.ts";
+import * as SkillManagement from "./provider/SkillManagement.ts";
+import * as ExternalMcpConnections from "./mcp/ExternalMcpConnections.ts";
 import * as ProjectionSnapshotQuery from "./orchestration/Services/ProjectionSnapshotQuery.ts";
 import { ThreadDeletionReactor } from "./orchestration/Services/ThreadDeletionReactor.ts";
 import {
@@ -148,7 +178,10 @@ import * as NewProject from "./project/NewProject.ts";
 import * as RepositoryIdentityResolver from "./project/RepositoryIdentityResolver.ts";
 import * as WorktreeSetupTracker from "./project/WorktreeSetupTracker.ts";
 import * as AgentSessionScanner from "./project/AgentSessionScanner.ts";
-import { importRecentAgentThreads } from "./project/AgentSessionImporter.ts";
+import {
+  importRecentAgentThreads,
+  importNormalizedHistory,
+} from "./project/AgentSessionImporter.ts";
 import * as ServerEnvironment from "./environment/ServerEnvironment.ts";
 import * as RemoteOpenTargets from "./environment/RemoteOpenTargets.ts";
 import * as BackgroundPolicy from "./background/BackgroundPolicy.ts";
@@ -499,13 +532,226 @@ function readClientAnalyticsProps(request: HttpServerRequest.HttpServerRequest) 
   };
 }
 
+const makeIntegrationWorkflowRpcLayer = (currentSession: EnvironmentAuth.AuthenticatedSession) =>
+  IntegrationWorkflowRpcGroup.toLayer(
+    Effect.gen(function* () {
+      const currentSessionId = currentSession.sessionId;
+      const globalMemory = yield* GlobalMemory.GlobalMemory;
+      const providerDoctor = yield* ProviderDoctor.ProviderDoctor;
+      const workflowApprovals = yield* WorkflowApprovals.WorkflowApprovals;
+      const integrationCatalog = yield* IntegrationCatalog.IntegrationCatalog;
+      const gmail = yield* GmailService.GmailService;
+      const remoteBuild = yield* RemoteBuildService.RemoteBuildService;
+      const images = yield* ImageGenerationService.ImageGenerationService;
+      const desktop = yield* DesktopAutomationBroker.DesktopAutomationBroker;
+      const sourceDevelopment = yield* SelfDevelopmentService.SelfDevelopmentService;
+      const browser = yield* BrowserTaskService.BrowserTaskService;
+      const environmentId = yield* (yield* ServerEnvironment.ServerEnvironment).getEnvironmentId;
+      const browserAuthority = { environmentId, humanSessionId: currentSessionId };
+      return {
+        [WS_METHODS.providerDoctorRunApproved]: (input) =>
+          providerDoctor.runApproved(input, { humanSessionId: currentSessionId }),
+        [WS_METHODS.providerDoctorCancel]: (input) =>
+          providerDoctor.cancel(input.runId, { humanSessionId: currentSessionId }),
+        [WS_METHODS.memoryGlobalRead]: (input) =>
+          globalMemory.read(input, { humanSessionId: currentSessionId, admin: true }),
+        [WS_METHODS.memoryGlobalWrite]: (input) =>
+          globalMemory.write(input, { humanSessionId: currentSessionId, admin: true }),
+        [WS_METHODS.sourceDevelopmentConfigure]: (input) =>
+          sourceDevelopment.configure(input, { trustedOperator: true }),
+        [WS_METHODS.sourceDevelopmentBuild]: (input) =>
+          sourceDevelopment.build(input, { trustedOperator: true }),
+        [WS_METHODS.sourceDevelopmentStatus]: () => sourceDevelopment.status(),
+        [WS_METHODS.sourceDevelopmentWait]: (input) => sourceDevelopment.wait(input.operationId),
+        [WS_METHODS.sourceDevelopmentCancel]: (input) =>
+          sourceDevelopment.cancel(input.operationId, { trustedOperator: true }),
+        [WS_METHODS.sourceDevelopmentReload]: (input) =>
+          sourceDevelopment.requestReload(input.operationId, { trustedOperator: true }),
+        [WS_METHODS.desktopConnect]: (input) =>
+          Stream.unwrap(desktop.connectForClient(input, currentSessionId, environmentId)),
+        [WS_METHODS.desktopAuthorize]: (input) =>
+          desktop.authorizeForClient(input, currentSessionId),
+        [WS_METHODS.desktopRespond]: (input) => desktop.respondForClient(input, currentSessionId),
+        [WS_METHODS.desktopDisconnect]: (input) =>
+          desktop.disconnectForClient(input.hostId, input.generation, currentSessionId),
+        [WS_METHODS.desktopHosts]: () => desktop.hosts(environmentId),
+        [WS_METHODS.desktopLease]: (input) => desktop.lease({ ...input, environmentId }),
+        [WS_METHODS.desktopRevoke]: (input) => desktop.revoke(input.leaseId),
+        [WS_METHODS.desktopInvoke]: (input) =>
+          desktop.invoke({ environmentId, threadId: input.threadId }, input.leaseId, input.action),
+        [WS_METHODS.browserRun]: (input) => browser.runForClient(input, browserAuthority),
+        [WS_METHODS.browserGet]: (input) => browser.getForClient(input, browserAuthority),
+        [WS_METHODS.browserCancel]: (input) => browser.cancelForClient(input, browserAuthority),
+        [WS_METHODS.integrationApprovalGrant]: (input) =>
+          workflowApprovals
+            .grant({ ...input, humanSessionId: currentSessionId })
+            .pipe(Effect.map((approvalId) => ({ approvalId }))),
+        [WS_METHODS.catalogStatus]: () => integrationCatalog.status(),
+        [WS_METHODS.catalogSearch]: (input) => integrationCatalog.search(input),
+        [WS_METHODS.catalogDetails]: (input) =>
+          integrationCatalog.details(input.requestId, input.productId),
+        [WS_METHODS.catalogSelect]: (input) =>
+          integrationCatalog.select(input.requestId, input.productId, input.reason),
+        [WS_METHODS.catalogSelectOffCatalog]: (input) =>
+          integrationCatalog.selectOffCatalog(input.productId, input.publicUrl, input.reason),
+        [WS_METHODS.catalogSelections]: () => integrationCatalog.selections(),
+        [WS_METHODS.catalogClearSelection]: (input) =>
+          integrationCatalog.clearSelection(input.selectionId),
+        [WS_METHODS.catalogSuggest]: (input) =>
+          integrationCatalog.suggest(input.payload, input.approvalId, input.idempotencyKey),
+        [WS_METHODS.gmailStatus]: () => gmail.status(),
+        [WS_METHODS.gmailBeginConnect]: (input) =>
+          gmail.beginConnect(currentSessionId, input.approvalId),
+        [WS_METHODS.gmailCompleteConnect]: (input) =>
+          gmail.completeConnect(currentSessionId, input.state, input.code),
+        [WS_METHODS.gmailDisconnect]: () => gmail.disconnect(),
+        [WS_METHODS.gmailSearch]: (input) => gmail.search(input.query, input.pageToken),
+        [WS_METHODS.gmailRead]: (input) => gmail.read(input.messageId),
+        [WS_METHODS.gmailAttachment]: (input) =>
+          gmail.attachment(input.messageId, input.attachmentId),
+        [WS_METHODS.gmailLabels]: () => gmail.labels(),
+        [WS_METHODS.gmailThreads]: (input) => gmail.threads(input.query),
+        [WS_METHODS.gmailReviewMutation]: (input) => gmail.reviewMutation(input),
+        [WS_METHODS.gmailMutate]: (input) => gmail.mutate(input),
+        [WS_METHODS.remoteBuildStatus]: () => remoteBuild.status(),
+        [WS_METHODS.remoteBuildPrepare]: (input) => remoteBuild.prepareForThread(input.threadId),
+        [WS_METHODS.remoteBuildDiscard]: (input) => remoteBuild.discard(input.snapshotId),
+        [WS_METHODS.remoteBuildSubmit]: (input) => remoteBuild.submit(input),
+        [WS_METHODS.imagesStatus]: () => images.status(),
+        [WS_METHODS.imagesCreate]: (input) => images.create(input),
+        [WS_METHODS.imagesDelete]: (input) => images.deleteAsset(input),
+      };
+    }),
+  );
+
 const makeWsRpcLayer = (
   currentSession: EnvironmentAuth.AuthenticatedSession,
   clientOrigin: OrchestrationClientOrigin,
   clientAnalyticsProps: Readonly<Record<string, unknown>>,
   previewAutomationBroker: PreviewAutomationBroker.PreviewAutomationBroker["Service"],
 ) =>
-  WsRpcGroup.toLayer(
+  Layer.mergeAll(
+    makeWsCoreRpcLayer(currentSession, clientOrigin, clientAnalyticsProps, previewAutomationBroker),
+    makeParityToolsRpcLayer(),
+    makeIntegrationWorkflowRpcLayer(currentSession),
+  );
+
+const makeParityToolsRpcLayer = () =>
+  ParityToolsRpcGroup.toLayer(
+    Effect.gen(function* () {
+      const documentAssets = yield* AgentDocumentAssets.AgentDocumentAssets;
+      const ambientWork = yield* AmbientWork.AmbientWork;
+      const threadRuntime = yield* ThreadRuntimeService.ThreadRuntimeService;
+      const runtimeHooks = yield* RuntimeHooks.RuntimeHooks;
+      const providerDoctor = yield* ProviderDoctor.ProviderDoctor;
+      const memory = yield* Memory.MemoryService;
+      const qualityRecords = yield* QualityRecords.QualityRecords;
+      const scheduledWork = yield* ScheduledWork.ScheduledWork;
+      const unattendedGrants = yield* UnattendedGrants.UnattendedGrants;
+      const backgroundJobs = yield* BackgroundJobs.BackgroundJobs;
+      const coordinationPlans = yield* CoordinationPlans.CoordinationPlans;
+      const agentSearch = yield* WorkspaceAgentSearch.WorkspaceAgentSearch;
+      const historySearch = yield* HistorySearch.HistorySearch;
+      const skillManagement = yield* SkillManagement.SkillManagement;
+      const externalMcp = yield* ExternalMcpConnections.ExternalMcpConnections;
+      return ParityToolsRpcGroup.of({
+        [WS_METHODS.runtimeHandoff]: (input) => threadRuntime.handoff(input),
+        [WS_METHODS.runtimeFork]: (input) => threadRuntime.fork(input),
+        [WS_METHODS.runtimeHooksList]: (input) =>
+          runtimeHooks.list({ projectId: input.projectId, trustedOperator: true }),
+        [WS_METHODS.runtimeHooksConfigure]: (input) =>
+          runtimeHooks.configure(input, { projectId: input.projectId, trustedOperator: true }),
+        [WS_METHODS.runtimeHooksRemove]: (input) =>
+          runtimeHooks.remove(input.id, { projectId: input.projectId, trustedOperator: true }),
+        [WS_METHODS.providerDoctorRun]: (input) =>
+          providerDoctor.run(input, { trustedOperator: true }),
+        [WS_METHODS.providerDoctorGet]: (input) => providerDoctor.get(input.runId),
+        [WS_METHODS.providerDoctorRemove]: (input) =>
+          providerDoctor.remove(input.runId, { trustedOperator: true }),
+        [WS_METHODS.qualitySubscribeChanges]: (input) =>
+          qualityRecords.subscribe(input, { threadId: input.threadId, source: "user-reported" }),
+        [WS_METHODS.agentDocumentsPrepareAsset]: (input) => documentAssets.prepare(input),
+        [WS_METHODS.ambientConfigure]: (input) =>
+          ambientWork.configure(input, { source: "client" }),
+        [WS_METHODS.ambientGet]: (input) => ambientWork.get(input),
+        [WS_METHODS.ambientStop]: (input) => ambientWork.stop(input),
+        [WS_METHODS.scheduledCreate]: (input) => scheduledWork.create(input),
+        [WS_METHODS.scheduledList]: (input) => scheduledWork.list(input),
+        [WS_METHODS.scheduledGet]: (input) => scheduledWork.get(input),
+        [WS_METHODS.scheduledCancel]: (input) => scheduledWork.cancel(input),
+        [WS_METHODS.unattendedGrantCreate]: (input) =>
+          unattendedGrants.create(input, { source: "client" }),
+        [WS_METHODS.unattendedGrantList]: (input) => unattendedGrants.list(input),
+        [WS_METHODS.unattendedGrantRevoke]: (input) =>
+          unattendedGrants.revoke(input, { source: "client" }),
+        [WS_METHODS.backgroundJobStart]: (input) => backgroundJobs.start(input),
+        [WS_METHODS.backgroundJobList]: (input) => backgroundJobs.list(input),
+        [WS_METHODS.backgroundJobGet]: (input) => backgroundJobs.get(input),
+        [WS_METHODS.backgroundJobOutput]: (input) => backgroundJobs.output(input),
+        [WS_METHODS.backgroundJobWait]: (input) => backgroundJobs.wait(input),
+        [WS_METHODS.backgroundJobCancel]: (input) => backgroundJobs.cancel(input),
+        [WS_METHODS.backgroundJobSubscribe]: (input) => backgroundJobs.subscribe(input),
+        [WS_METHODS.backgroundJobCleanup]: (input) => backgroundJobs.cleanup(input),
+        [WS_METHODS.memoryRemember]: ({ projectId, input }) =>
+          memory.remember(input, { projectId, allowGlobal: false }),
+        [WS_METHODS.memoryRecall]: ({ projectId, input }) =>
+          memory.recall(input, { projectId, allowGlobal: false }),
+        [WS_METHODS.memorySearch]: ({ projectId, input }) =>
+          memory.search(input, { projectId, allowGlobal: false }),
+        [WS_METHODS.memoryForget]: ({ projectId, input }) =>
+          memory.forget(input, { projectId, allowGlobal: false }),
+        [WS_METHODS.memoryTag]: ({ projectId, input }) =>
+          memory.tag(input, { projectId, allowGlobal: false }),
+        [WS_METHODS.memoryLink]: ({ projectId, input }) =>
+          memory.link(input, { projectId, allowGlobal: false }),
+        [WS_METHODS.memoryRelated]: ({ projectId, input }) =>
+          memory.related(input, { projectId, allowGlobal: false }),
+        [WS_METHODS.qualityRead]: (input) =>
+          qualityRecords.get(input, { threadId: input.threadId, source: "user-reported" }),
+        [WS_METHODS.qualityUpdate]: (input) =>
+          qualityRecords.update(input, { threadId: input.threadId, source: "user-reported" }),
+        [WS_METHODS.coordinationMailboxRead]: (input) => coordinationPlans.mailboxRead(input),
+        [WS_METHODS.coordinationMailboxWrite]: (input) => coordinationPlans.mailboxWrite(input),
+        [WS_METHODS.coordinationRead]: (input) => coordinationPlans.read(input),
+        [WS_METHODS.coordinationWrite]: (input) => coordinationPlans.write(input),
+        [WS_METHODS.agentSearch]: (input) => agentSearch.search(input),
+        [WS_METHODS.historySearch]: (input) => historySearch.search(input),
+        [WS_METHODS.historyImport]: (input) =>
+          importNormalizedHistory(input).pipe(
+            Effect.mapError((cause) =>
+              cause instanceof RuntimeOperationError
+                ? cause
+                : new RuntimeOperationError({
+                    code: "storage",
+                    detail: "Normalized history import could not be completed.",
+                  }),
+            ),
+          ),
+        [WS_METHODS.historyRead]: (input) => historySearch.readHistory(input),
+        [WS_METHODS.skillsList]: (input) => skillManagement.list(input),
+        [WS_METHODS.skillsRead]: (input) => skillManagement.read(input),
+        [WS_METHODS.skillsLoad]: (input) => skillManagement.load(input),
+        [WS_METHODS.skillsReload]: (input) => skillManagement.reload(input),
+        [WS_METHODS.externalMcpConfigure]: (input) => externalMcp.configure(input),
+        [WS_METHODS.externalMcpList]: () => externalMcp.list(),
+        [WS_METHODS.externalMcpConnect]: (input) => externalMcp.connect(input),
+        [WS_METHODS.externalMcpDisconnect]: (input) => externalMcp.disconnect(input),
+        [WS_METHODS.externalMcpReload]: (input) => externalMcp.reload(input),
+        [WS_METHODS.externalMcpRemove]: (input) => externalMcp.remove(input),
+        [WS_METHODS.externalMcpSearch]: (input) => externalMcp.searchTools(input),
+        [WS_METHODS.externalMcpCall]: (input) => externalMcp.callTool(input),
+        [WS_METHODS.externalMcpCancel]: (input) => externalMcp.cancelCall(input),
+      });
+    }),
+  );
+
+const makeWsCoreRpcLayer = (
+  currentSession: EnvironmentAuth.AuthenticatedSession,
+  clientOrigin: OrchestrationClientOrigin,
+  clientAnalyticsProps: Readonly<Record<string, unknown>>,
+  previewAutomationBroker: PreviewAutomationBroker.PreviewAutomationBroker["Service"],
+) =>
+  WsCoreRpcGroup.toLayer(
     Effect.gen(function* () {
       const currentSessionId = currentSession.sessionId;
       const crypto = yield* Crypto.Crypto;
@@ -522,6 +768,8 @@ const makeWsRpcLayer = (
               Effect.orElseSucceed(() => null),
             );
       const orchestrationEngine = yield* OrchestrationEngine.OrchestrationEngineService;
+      const ownedWorkers = yield* OwnedWorkers.OwnedWorkers;
+      const agentDocuments = yield* AgentDocuments.AgentDocuments;
       const threadDeletionReactor = yield* ThreadDeletionReactor;
       const analytics = yield* AnalyticsService.AnalyticsService;
       // Every command dispatched on this connection carries the connecting
@@ -2136,7 +2384,7 @@ const makeWsRpcLayer = (
           .refreshStatus(cwd)
           .pipe(Effect.ignoreCause({ log: true }), Effect.forkDetach, Effect.asVoid);
 
-      return WsRpcGroup.of({
+      return WsCoreRpcGroup.of({
         [ORCHESTRATION_WS_METHODS.dispatchCommand]: (command) =>
           observeRpcEffect(
             ORCHESTRATION_WS_METHODS.dispatchCommand,
@@ -2224,6 +2472,34 @@ const makeWsRpcLayer = (
             ),
             { "rpc.aggregate": "orchestration" },
           ),
+        [WS_METHODS.agentDocumentsRead]: (input) => agentDocuments.read(input),
+        [WS_METHODS.agentDocumentsWrite]: (input) => agentDocuments.write(input),
+        [WS_METHODS.agentDocumentsAction]: (input) => agentDocuments.action(input),
+        [WS_METHODS.agentDocumentsWait]: (input) => agentDocuments.wait(input),
+        [WS_METHODS.workersSpawn]: (input) =>
+          observeRpcEffect(WS_METHODS.workersSpawn, ownedWorkers.spawn(input), {
+            "rpc.aggregate": "workers",
+          }),
+        [WS_METHODS.workersList]: (input) =>
+          observeRpcEffect(WS_METHODS.workersList, ownedWorkers.list(input), {
+            "rpc.aggregate": "workers",
+          }),
+        [WS_METHODS.workersGet]: (input) =>
+          observeRpcEffect(WS_METHODS.workersGet, ownedWorkers.get(input), {
+            "rpc.aggregate": "workers",
+          }),
+        [WS_METHODS.workersSend]: (input) =>
+          observeRpcEffect(WS_METHODS.workersSend, ownedWorkers.send(input), {
+            "rpc.aggregate": "workers",
+          }),
+        [WS_METHODS.workersStop]: (input) =>
+          observeRpcEffect(WS_METHODS.workersStop, ownedWorkers.stop(input), {
+            "rpc.aggregate": "workers",
+          }),
+        [WS_METHODS.workersWait]: (input) =>
+          observeRpcEffect(WS_METHODS.workersWait, ownedWorkers.wait(input), {
+            "rpc.aggregate": "workers",
+          }),
         [ORCHESTRATION_WS_METHODS.getWorkflowScript]: (input) =>
           observeRpcEffect(
             ORCHESTRATION_WS_METHODS.getWorkflowScript,
@@ -4108,6 +4384,32 @@ export const websocketRpcRouteLayer = Layer.unwrap(
         ),
     });
     const pullRequests = yield* PullRequestService.PullRequestService;
+    const ownedWorkers = yield* OwnedWorkers.OwnedWorkers;
+    const agentDocuments = yield* AgentDocuments.AgentDocuments;
+    const documentAssets = yield* AgentDocumentAssets.AgentDocumentAssets;
+    const ambientWork = yield* AmbientWork.AmbientWork;
+    const threadRuntime = yield* ThreadRuntimeService.ThreadRuntimeService;
+    const runtimeHooks = yield* RuntimeHooks.RuntimeHooks;
+    const providerDoctor = yield* ProviderDoctor.ProviderDoctor;
+    const workflowApprovals = yield* WorkflowApprovals.WorkflowApprovals;
+    const integrationCatalog = yield* IntegrationCatalog.IntegrationCatalog;
+    const gmail = yield* GmailService.GmailService;
+    const globalMemory = yield* GlobalMemory.GlobalMemory;
+    const remoteBuild = yield* RemoteBuildService.RemoteBuildService;
+    const images = yield* ImageGenerationService.ImageGenerationService;
+    const desktop = yield* DesktopAutomationBroker.DesktopAutomationBroker;
+    const sourceDevelopment = yield* SelfDevelopmentService.SelfDevelopmentService;
+    const browser = yield* BrowserTaskService.BrowserTaskService;
+    const memory = yield* Memory.MemoryService;
+    const qualityRecords = yield* QualityRecords.QualityRecords;
+    const scheduledWork = yield* ScheduledWork.ScheduledWork;
+    const unattendedGrants = yield* UnattendedGrants.UnattendedGrants;
+    const backgroundJobs = yield* BackgroundJobs.BackgroundJobs;
+    const coordinationPlans = yield* CoordinationPlans.CoordinationPlans;
+    const agentSearch = yield* WorkspaceAgentSearch.WorkspaceAgentSearch;
+    const historySearch = yield* HistorySearch.HistorySearch;
+    const skillManagement = yield* SkillManagement.SkillManagement;
+    const externalMcp = yield* ExternalMcpConnections.ExternalMcpConnections;
     const sql = yield* SqlClient.SqlClient;
     return HttpRouter.add(
       "GET",
@@ -4142,42 +4444,82 @@ export const websocketRpcRouteLayer = Layer.unwrap(
           return httpEffect;
         }).pipe(
           Effect.provide(
-            makeWsRpcLayer(
-              session,
-              clientOrigin,
-              clientAnalyticsProps,
-              previewAutomationBroker,
-            ).pipe(
-              Layer.provideMerge(RpcSerialization.layerJson),
-              Layer.provide(Layer.succeed(SqlClient.SqlClient, sql)),
-              Layer.provide(AgentSessionScanner.layer),
-              Layer.provide(ProviderMaintenanceRunner.layer),
-              Layer.provide(Layer.succeed(ServerSelfUpdate.ServerSelfUpdate, serverSelfUpdate)),
-              // One server-lifetime service means clients share the same PR caches, and a WS
-              // mutation invalidates the HTTP diff cache that every client reads from.
-              Layer.provide(Layer.succeed(PullRequestService.PullRequestService, pullRequests)),
-              Layer.provide(
-                SourceControlDiscovery.layer.pipe(
-                  Layer.provide(
-                    SourceControlProviderRegistry.layer.pipe(
-                      Layer.provide(
-                        Layer.mergeAll(
-                          AzureDevOpsCli.layer,
-                          BitbucketApi.layer,
-                          GitHubCli.layer,
-                          GitLabCli.layer,
-                          ForgejoCli.layer,
+            makeWsRpcLayer(session, clientOrigin, clientAnalyticsProps, previewAutomationBroker)
+              .pipe(
+                Layer.provideMerge(RpcSerialization.layerJson),
+                Layer.provide(Layer.succeed(SqlClient.SqlClient, sql)),
+                Layer.provide(AgentSessionScanner.layer),
+                Layer.provide(ProviderMaintenanceRunner.layer),
+                Layer.provide(Layer.succeed(ServerSelfUpdate.ServerSelfUpdate, serverSelfUpdate)),
+                // One server-lifetime service means clients share the same PR caches, and a WS
+                // mutation invalidates the HTTP diff cache that every client reads from.
+                Layer.provide(Layer.succeed(PullRequestService.PullRequestService, pullRequests)),
+                Layer.provide(Layer.succeed(OwnedWorkers.OwnedWorkers, ownedWorkers)),
+                Layer.provide(Layer.succeed(AgentDocuments.AgentDocuments, agentDocuments)),
+                Layer.provide(
+                  Layer.succeed(AgentDocumentAssets.AgentDocumentAssets, documentAssets),
+                ),
+                Layer.provide(Layer.succeed(AmbientWork.AmbientWork, ambientWork)),
+                Layer.provide(
+                  Layer.mergeAll(
+                    Layer.succeed(ThreadRuntimeService.ThreadRuntimeService, threadRuntime),
+                    Layer.succeed(RuntimeHooks.RuntimeHooks, runtimeHooks),
+                    Layer.succeed(ProviderDoctor.ProviderDoctor, providerDoctor),
+                  ),
+                ),
+                Layer.provide(Layer.succeed(Memory.MemoryService, memory)),
+                Layer.provide(Layer.succeed(QualityRecords.QualityRecords, qualityRecords)),
+                Layer.provide(Layer.succeed(ScheduledWork.ScheduledWork, scheduledWork)),
+                Layer.provide(Layer.succeed(UnattendedGrants.UnattendedGrants, unattendedGrants)),
+                Layer.provide(Layer.succeed(BackgroundJobs.BackgroundJobs, backgroundJobs)),
+              )
+              .pipe(
+                Layer.provide(
+                  Layer.mergeAll(
+                    Layer.succeed(WorkflowApprovals.WorkflowApprovals, workflowApprovals),
+                    Layer.succeed(IntegrationCatalog.IntegrationCatalog, integrationCatalog),
+                    Layer.succeed(GmailService.GmailService, gmail),
+                    Layer.succeed(GlobalMemory.GlobalMemory, globalMemory),
+                    Layer.succeed(RemoteBuildService.RemoteBuildService, remoteBuild),
+                    Layer.succeed(ImageGenerationService.ImageGenerationService, images),
+                    Layer.succeed(DesktopAutomationBroker.DesktopAutomationBroker, desktop),
+                    Layer.succeed(SelfDevelopmentService.SelfDevelopmentService, sourceDevelopment),
+                    Layer.succeed(BrowserTaskService.BrowserTaskService, browser),
+                  ),
+                ),
+                Layer.provide(
+                  Layer.succeed(CoordinationPlans.CoordinationPlans, coordinationPlans),
+                ),
+                Layer.provide(
+                  Layer.succeed(WorkspaceAgentSearch.WorkspaceAgentSearch, agentSearch),
+                ),
+                Layer.provide(Layer.succeed(HistorySearch.HistorySearch, historySearch)),
+                Layer.provide(Layer.succeed(SkillManagement.SkillManagement, skillManagement)),
+                Layer.provide(
+                  Layer.succeed(ExternalMcpConnections.ExternalMcpConnections, externalMcp),
+                ),
+                Layer.provide(
+                  SourceControlDiscovery.layer.pipe(
+                    Layer.provide(
+                      SourceControlProviderRegistry.layer.pipe(
+                        Layer.provide(
+                          Layer.mergeAll(
+                            AzureDevOpsCli.layer,
+                            BitbucketApi.layer,
+                            GitHubCli.layer,
+                            GitLabCli.layer,
+                            ForgejoCli.layer,
+                          ),
                         ),
-                      ),
-                      Layer.provideMerge(GitVcsDriver.layer),
-                      Layer.provide(
-                        VcsDriverRegistry.layer.pipe(Layer.provide(VcsProjectConfig.layer)),
+                        Layer.provideMerge(GitVcsDriver.layer),
+                        Layer.provide(
+                          VcsDriverRegistry.layer.pipe(Layer.provide(VcsProjectConfig.layer)),
+                        ),
                       ),
                     ),
                   ),
                 ),
               ),
-            ),
           ),
         );
         return yield* Effect.acquireUseRelease(

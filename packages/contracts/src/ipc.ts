@@ -1122,6 +1122,16 @@ export const SystemSettingsPaneSchema = Schema.Literals(["full-disk-access"]);
 export type SystemSettingsPane = typeof SystemSettingsPaneSchema.Type;
 
 export interface DesktopBridge {
+  consentNativeAutomation?: (
+    input: typeof import("./desktopAutomation.ts").DesktopLocalConsentInput.Type,
+  ) => Promise<typeof import("./desktopAutomation.ts").DesktopLocalRegistration.Type>;
+  executeNativeAutomation?: (
+    input: typeof import("./desktopAutomation.ts").DesktopLocalExecuteInput.Type,
+  ) => Promise<unknown>;
+  revokeNativeAutomation?: () => Promise<void>;
+  nativeAutomationStatus?: () => Promise<
+    typeof import("./desktopAutomation.ts").DesktopLocalRegistration.Type | null
+  >;
   getAppBranding: () => DesktopAppBranding | null;
   /** Absolute path of a dropped or picked file; absent on desktop builds predating it. */
   getPathForFile?: (file: File) => string;

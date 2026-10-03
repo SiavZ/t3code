@@ -66,6 +66,16 @@ import Migration0051 from "./Migrations/051_ProjectionThreadMessageContext.ts";
 import Migration0052 from "./Migrations/052_ProjectionThreadTitleState.ts";
 import Migration0053 from "./Migrations/053_PullRequestFilesViewed.ts";
 import Migration0054 from "./Migrations/054_ProjectionThreadsAutoSettleDisabledAt.ts";
+import Migration0055 from "./Migrations/055_ProjectionThreadsWorkers.ts";
+import Migration0056 from "./Migrations/056_CoordinationPlans.ts";
+import Migration0057 from "./Migrations/057_Memory.ts";
+import Migration0058 from "./Migrations/058_QualityRecords.ts";
+import Migration0059 from "./Migrations/059_ScheduledWork.ts";
+import Migration0060 from "./Migrations/060_BackgroundJobs.ts";
+import Migration0061 from "./Migrations/061_AgentDocuments.ts";
+import Migration0062 from "./Migrations/062_ExternalMcpConnections.ts";
+import Migration0063 from "./Migrations/063_RuntimeOperations.ts";
+import Migration0064 from "./Migrations/064_IntegrationWorkflows.ts";
 
 /**
  * Migration loader with all migrations defined inline.
@@ -132,6 +142,16 @@ const migrationEntries = [
   [52, "ProjectionThreadTitleState", Migration0052],
   [53, "PullRequestFilesViewed", Migration0053],
   [54, "ProjectionThreadsAutoSettleDisabledAt", Migration0054],
+  [55, "ProjectionThreadsWorkers", Migration0055],
+  [56, "CoordinationPlans", Migration0056],
+  [57, "Memory", Migration0057],
+  [58, "QualityRecords", Migration0058],
+  [59, "ScheduledWork", Migration0059],
+  [60, "BackgroundJobs", Migration0060],
+  [61, "AgentDocuments", Migration0061],
+  [62, "ExternalMcpConnections", Migration0062],
+  [63, "RuntimeOperations", Migration0063],
+  [64, "IntegrationWorkflows", Migration0064],
 ] as const;
 
 export const migrationManifest = migrationEntries.map(([id, name]) => [id, name] as const);

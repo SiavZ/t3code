@@ -191,6 +191,7 @@ describe("ProviderSessionReaper", () => {
 
     const providerService: ProviderServiceShape = {
       startSession: () => unsupported(),
+      startDiagnosticSession: () => unsupported(),
       sendTurn: () => unsupported(),
       compactThread: () => unsupported(),
       interruptTurn: () => unsupported(),
@@ -233,6 +234,11 @@ describe("ProviderSessionReaper", () => {
       Layer.provideMerge(Layer.succeed(ProviderService, providerService)),
       Layer.provideMerge(
         Layer.succeed(ProjectionSnapshotQuery, {
+          getThreadActivationAuthority: () => Effect.succeed(Option.none()),
+          getWorkerSpawnMetadata: () => Effect.die("unused"),
+          getWorkerAdmissionStates: () => Effect.die("unused"),
+          getWorkerState: () => Effect.die("unused"),
+          listWorkerStates: () => Effect.die("unused"),
           getUserInputActivity: () => Effect.die("unused"),
           listActivitiesByKind: () => Effect.die("unused"),
           getCommandReadModel: () => Effect.die("unused"),
