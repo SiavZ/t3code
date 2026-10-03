@@ -23,6 +23,8 @@ type WsRpcMethod = RpcGroup.Rpcs<typeof WsRpcGroup>["_tag"];
  * runtime failure.
  */
 export const RPC_REQUIRED_SCOPES = {
+  [WS_METHODS.providerDoctorRunApproved]: AuthAccessWriteScope,
+  [WS_METHODS.providerDoctorCancel]: AuthAccessWriteScope,
   [WS_METHODS.memoryGlobalRead]: AuthAccessWriteScope,
   [WS_METHODS.memoryGlobalWrite]: AuthAccessWriteScope,
   [WS_METHODS.desktopConnect]: AuthAccessWriteScope,
@@ -70,6 +72,9 @@ export const RPC_REQUIRED_SCOPES = {
   [WS_METHODS.runtimeHooksList]: AuthOrchestrationReadScope,
   [WS_METHODS.runtimeHooksConfigure]: AuthAccessWriteScope,
   [WS_METHODS.runtimeHooksRemove]: AuthAccessWriteScope,
+  [WS_METHODS.providerDoctorRun]: AuthOrchestrationOperateScope,
+  [WS_METHODS.providerDoctorGet]: AuthOrchestrationReadScope,
+  [WS_METHODS.providerDoctorRemove]: AuthOrchestrationOperateScope,
   [WS_METHODS.qualitySubscribeChanges]: AuthOrchestrationReadScope,
   [WS_METHODS.agentDocumentsPrepareAsset]: AuthOrchestrationOperateScope,
   [WS_METHODS.ambientConfigure]: AuthAccessWriteScope,

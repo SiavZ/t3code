@@ -24,6 +24,7 @@ import * as AgentDocumentAssets from "../orchestration/AgentDocumentAssets.ts";
 import * as ThreadRuntimeService from "../orchestration/ThreadRuntimeService.ts";
 import * as RuntimeHooks from "../provider/RuntimeHooks.ts";
 import * as RuntimeHookObservers from "../provider/RuntimeHookObservers.ts";
+import * as ProviderDoctor from "../provider/ProviderDoctor.ts";
 import * as ProcessRunner from "../processRunner.ts";
 import * as IntegrationConfiguration from "../integrations/IntegrationConfiguration.ts";
 import * as PreviewAutomationBroker from "../mcp/PreviewAutomationBroker.ts";
@@ -61,6 +62,7 @@ export const parityDependenciesLayer = parityStartupDependenciesLayer.pipe(
       Memory.layer,
       QualityRecords.layer,
       AgentDocumentAssets.layer,
+      ProviderDoctor.layer,
       IntegrationConfiguration.configuredLayer({}, "unused-test-integration-assets").pipe(
         Layer.provide(PreviewAutomationBroker.layer),
       ),

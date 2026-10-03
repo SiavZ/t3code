@@ -114,6 +114,7 @@ import * as AgentDocumentAssets from "./orchestration/AgentDocumentAssets.ts";
 import * as AmbientWork from "./orchestration/AmbientWork.ts";
 import * as ThreadRuntimeService from "./orchestration/ThreadRuntimeService.ts";
 import * as RuntimeHooks from "./provider/RuntimeHooks.ts";
+import * as ProviderDoctor from "./provider/ProviderDoctor.ts";
 import * as DesktopAutomationBroker from "./integrations/DesktopAutomationBroker.ts";
 import * as BrowserTaskService from "./integrations/BrowserTaskService.ts";
 import * as WorkflowApprovals from "./integrations/WorkflowApprovals.ts";
@@ -535,6 +536,7 @@ const makeIntegrationWorkflowRpcLayer = (currentSession: EnvironmentAuth.Authent
     Effect.gen(function* () {
       const currentSessionId = currentSession.sessionId;
       const globalMemory = yield* GlobalMemory.GlobalMemory;
+      const providerDoctor = yield* ProviderDoctor.ProviderDoctor;
       const workflowApprovals = yield* WorkflowApprovals.WorkflowApprovals;
       const integrationCatalog = yield* IntegrationCatalog.IntegrationCatalog;
       const gmail = yield* GmailService.GmailService;
@@ -545,6 +547,10 @@ const makeIntegrationWorkflowRpcLayer = (currentSession: EnvironmentAuth.Authent
       const environmentId = yield* (yield* ServerEnvironment.ServerEnvironment).getEnvironmentId;
       const browserAuthority = { environmentId, humanSessionId: currentSessionId };
       return {
+        [WS_METHODS.providerDoctorRunApproved]: (input) =>
+          providerDoctor.runApproved(input, { humanSessionId: currentSessionId }),
+        [WS_METHODS.providerDoctorCancel]: (input) =>
+          providerDoctor.cancel(input.runId, { humanSessionId: currentSessionId }),
         [WS_METHODS.memoryGlobalRead]: (input) =>
           globalMemory.read(input, { humanSessionId: currentSessionId, admin: true }),
         [WS_METHODS.memoryGlobalWrite]: (input) =>
@@ -625,6 +631,7 @@ const makeParityToolsRpcLayer = () =>
       const ambientWork = yield* AmbientWork.AmbientWork;
       const threadRuntime = yield* ThreadRuntimeService.ThreadRuntimeService;
       const runtimeHooks = yield* RuntimeHooks.RuntimeHooks;
+      const providerDoctor = yield* ProviderDoctor.ProviderDoctor;
       const memory = yield* Memory.MemoryService;
       const qualityRecords = yield* QualityRecords.QualityRecords;
       const scheduledWork = yield* ScheduledWork.ScheduledWork;
@@ -644,6 +651,11 @@ const makeParityToolsRpcLayer = () =>
           runtimeHooks.configure(input, { projectId: input.projectId, trustedOperator: true }),
         [WS_METHODS.runtimeHooksRemove]: (input) =>
           runtimeHooks.remove(input.id, { projectId: input.projectId, trustedOperator: true }),
+        [WS_METHODS.providerDoctorRun]: (input) =>
+          providerDoctor.run(input, { trustedOperator: true }),
+        [WS_METHODS.providerDoctorGet]: (input) => providerDoctor.get(input.runId),
+        [WS_METHODS.providerDoctorRemove]: (input) =>
+          providerDoctor.remove(input.runId, { trustedOperator: true }),
         [WS_METHODS.qualitySubscribeChanges]: (input) =>
           qualityRecords.subscribe(input, { threadId: input.threadId, source: "user-reported" }),
         [WS_METHODS.agentDocumentsPrepareAsset]: (input) => documentAssets.prepare(input),
@@ -4366,6 +4378,7 @@ export const websocketRpcRouteLayer = Layer.unwrap(
     const ambientWork = yield* AmbientWork.AmbientWork;
     const threadRuntime = yield* ThreadRuntimeService.ThreadRuntimeService;
     const runtimeHooks = yield* RuntimeHooks.RuntimeHooks;
+    const providerDoctor = yield* ProviderDoctor.ProviderDoctor;
     const workflowApprovals = yield* WorkflowApprovals.WorkflowApprovals;
     const integrationCatalog = yield* IntegrationCatalog.IntegrationCatalog;
     const gmail = yield* GmailService.GmailService;
@@ -4438,6 +4451,7 @@ export const websocketRpcRouteLayer = Layer.unwrap(
                   Layer.mergeAll(
                     Layer.succeed(ThreadRuntimeService.ThreadRuntimeService, threadRuntime),
                     Layer.succeed(RuntimeHooks.RuntimeHooks, runtimeHooks),
+                    Layer.succeed(ProviderDoctor.ProviderDoctor, providerDoctor),
                   ),
                 ),
                 Layer.provide(Layer.succeed(Memory.MemoryService, memory)),

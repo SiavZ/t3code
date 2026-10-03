@@ -78,6 +78,7 @@ import Migration0063 from "./Migrations/063_ExternalMcpConnections.ts";
 import Migration0064 from "./Migrations/064_RuntimeOperations.ts";
 import Migration0065 from "./Migrations/065_IntegrationWorkflows.ts";
 import Migration0066 from "./Migrations/066_RuntimeHooks.ts";
+import Migration0067 from "./Migrations/067_ProviderDiagnostics.ts";
 
 /**
  * Migration loader with all migrations defined inline.
@@ -156,6 +157,7 @@ const migrationEntries = [
   [64, "RuntimeOperations", Migration0064],
   [65, "IntegrationWorkflows", Migration0065],
   [66, "RuntimeHooks", Migration0066],
+  [67, "ProviderDiagnostics", Migration0067],
 ] as const;
 
 export const migrationManifest = migrationEntries.map(([id, name]) => [id, name] as const);

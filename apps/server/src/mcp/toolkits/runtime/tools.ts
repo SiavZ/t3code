@@ -4,11 +4,18 @@ import * as Toolkit from "effect/unstable/ai/Toolkit";
 import { RuntimeThreadMetadata, McpCapabilityUnavailableError } from "@t3tools/contracts";
 import * as R from "../../../../../../packages/contracts/src/runtimeOperations.ts";
 import { ThreadRuntimeService } from "../../../orchestration/ThreadRuntimeService.ts";
+import { ProviderDoctor } from "../../../provider/ProviderDoctor.ts";
+import { ProjectionSnapshotQuery } from "../../../orchestration/Services/ProjectionSnapshotQuery.ts";
 import { McpInvocationContext } from "../../McpInvocationContext.ts";
 const { threadId: _thread, ...handoffFields } = R.RuntimeHandoffInput.fields;
 const { sourceThreadId: _source, ...forkFields } = R.RuntimeForkInput.fields;
 const failure = Schema.Union([R.RuntimeOperationError, McpCapabilityUnavailableError]);
-const dependencies = [McpInvocationContext, ThreadRuntimeService];
+const dependencies = [
+  McpInvocationContext,
+  ThreadRuntimeService,
+  ProjectionSnapshotQuery,
+  ProviderDoctor,
+];
 export const RuntimeToolkit = Toolkit.make(
   Tool.make("runtime_metadata", {
     description:
@@ -39,5 +46,15 @@ export const RuntimeToolkit = Toolkit.make(
     dependencies,
   })
     .annotate(Tool.Readonly, false)
+    .annotate(Tool.Idempotent, true),
+  Tool.make("runtime_doctor_offline", {
+    description:
+      "Read cached/offline diagnostics for this thread's configured provider. Does not run processes, network requests or charged inference.",
+    parameters: Schema.Struct({ runId: R.ProviderDoctorInput.fields.runId }),
+    success: R.ProviderDoctorResult,
+    failure,
+    dependencies,
+  })
+    .annotate(Tool.Readonly, true)
     .annotate(Tool.Idempotent, true),
 );

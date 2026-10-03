@@ -1048,6 +1048,7 @@ describe("OwnedWorkers", () => {
           Effect.gen(function* () {
             const provider = ProviderService.of({
               startSession: () => Effect.die("Unexpected provider start"),
+              startDiagnosticSession: () => Effect.die("Unexpected diagnostic provider start"),
               sendTurn: () => Effect.die("Unexpected provider turn"),
               compactThread: () => Effect.die("Unexpected provider compact"),
               interruptTurn: () => Effect.die("Unexpected provider interrupt"),

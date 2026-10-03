@@ -346,6 +346,8 @@ export const WS_METHODS = {
   gmailThreads: "gmail.threads",
   gmailMutate: "gmail.mutate",
   memoryGlobalRead: "memoryGlobal.read",
+  providerDoctorRunApproved: "providerDoctor.runApproved",
+  providerDoctorCancel: "providerDoctor.cancel",
   memoryGlobalWrite: "memoryGlobal.write",
   gmailReviewMutation: "gmail.reviewMutation",
   remoteBuildStatus: "remoteBuild.status",
@@ -360,6 +362,9 @@ export const WS_METHODS = {
   runtimeHooksList: "runtimeHooks.list",
   runtimeHooksConfigure: "runtimeHooks.configure",
   runtimeHooksRemove: "runtimeHooks.remove",
+  providerDoctorRun: "providerDoctor.run",
+  providerDoctorGet: "providerDoctor.get",
+  providerDoctorRemove: "providerDoctor.remove",
   qualitySubscribeChanges: "quality.subscribeChanges",
   agentDocumentsPrepareAsset: "agentDocuments.prepareAsset",
   ambientConfigure: "ambient.configure",
@@ -1654,6 +1659,16 @@ export const AgentDocumentsRpcGroup = RpcGroup.make(
 );
 
 export const IntegrationWorkflowRpcGroup = RpcGroup.make(
+  Rpc.make(WS_METHODS.providerDoctorRunApproved, {
+    payload: Runtime.ProviderDoctorApprovedInput,
+    success: Runtime.ProviderDoctorResult,
+    error: Schema.Union([Runtime.RuntimeOperationError, EnvironmentAuthorizationError]),
+  }),
+  Rpc.make(WS_METHODS.providerDoctorCancel, {
+    payload: Schema.Struct({ runId: TrimmedNonEmptyString }),
+    success: Schema.Boolean,
+    error: Schema.Union([Runtime.RuntimeOperationError, EnvironmentAuthorizationError]),
+  }),
   Rpc.make(WS_METHODS.memoryGlobalRead, {
     payload: Memory.GlobalMemoryReadInput,
     success: Memory.MemoryResult,
@@ -1899,6 +1914,21 @@ export const ParityToolsRpcGroup = RpcGroup.make(
     payload: Schema.Struct({ projectId: ProjectId, id: TrimmedNonEmptyString }),
     success: Schema.Void,
     error: Schema.Union([Hooks.RuntimeHooksError, EnvironmentAuthorizationError]),
+  }),
+  Rpc.make(WS_METHODS.providerDoctorRun, {
+    payload: Runtime.ProviderDoctorInput,
+    success: Runtime.ProviderDoctorResult,
+    error: Schema.Union([Runtime.RuntimeOperationError, EnvironmentAuthorizationError]),
+  }),
+  Rpc.make(WS_METHODS.providerDoctorGet, {
+    payload: Schema.Struct({ runId: TrimmedNonEmptyString }),
+    success: Schema.NullOr(Runtime.ProviderDoctorResult),
+    error: Schema.Union([Runtime.RuntimeOperationError, EnvironmentAuthorizationError]),
+  }),
+  Rpc.make(WS_METHODS.providerDoctorRemove, {
+    payload: Schema.Struct({ runId: TrimmedNonEmptyString }),
+    success: Schema.Void,
+    error: Schema.Union([Runtime.RuntimeOperationError, EnvironmentAuthorizationError]),
   }),
   Rpc.make(WS_METHODS.qualitySubscribeChanges, {
     payload: Quality.QualityReadInput,

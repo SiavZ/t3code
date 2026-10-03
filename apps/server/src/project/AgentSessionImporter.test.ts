@@ -63,6 +63,10 @@ import { importRecentAgentThreads } from "./AgentSessionImporter.ts";
 import * as AgentSessionScanner from "./AgentSessionScanner.ts";
 import * as RuntimeOperations from "../orchestration/ThreadRuntimeService.ts";
 import { ProviderService } from "../provider/Services/ProviderService.ts";
+import * as DiagnosticRunner from "../provider/ProviderDiagnosticRunner.ts";
+import * as Doctor from "../provider/ProviderDoctor.ts";
+import * as Approvals from "../integrations/WorkflowApprovals.ts";
+import { providerDoctorApprovalReview } from "../../../../packages/contracts/src/runtimeOperations.ts";
 
 const PROJECT_ID = ProjectId.make("project-1");
 const WORKSPACE_ROOT = "/tmp/project-from-server";
@@ -584,6 +588,175 @@ const integrationLayer = Layer.mergeAll(
 );
 
 it.layer(integrationLayer)("AgentSessionImporter integration", (it) => {
+  it.effect(
+    "disposable doctor completes a real routed test-adapter turn and removes only its own binding",
+    () =>
+      Effect.gen(function* () {
+        const directory = yield* ProviderSessionDirectory.ProviderSessionDirectory;
+        const snapshots = yield* ProjectionSnapshotQuery.ProjectionSnapshotQuery;
+        const fs = yield* FileSystem.FileSystem;
+        const harness = yield* makeTestProviderAdapterHarness({
+          provider: ProviderDriverKind.make("codex"),
+        });
+        yield* harness.queueTurnResponseForNextSession({ events: [] });
+        const startSession = vi.fn(harness.adapter.startSession);
+        const stopSession = vi.fn(harness.adapter.stopSession);
+        const sending = yield* Deferred.make<void>();
+        const release = yield* Deferred.make<void>();
+        const cancelSending = yield* Deferred.make<void>();
+        const holdCancelled = yield* Deferred.make<void>();
+        let sends = 0;
+        const sendTurn: typeof harness.adapter.sendTurn = (input) =>
+          Effect.gen(function* () {
+            sends++;
+            if (sends === 1) {
+              yield* Deferred.succeed(sending, undefined);
+              yield* Deferred.await(release);
+            } else {
+              yield* Deferred.succeed(cancelSending, undefined);
+              yield* Deferred.await(holdCancelled);
+            }
+            return yield* harness.adapter.sendTurn(input);
+          });
+        const providerLayer = makeProviderServiceLive().pipe(
+          Layer.provide(
+            Layer.succeed(
+              ProviderAdapterRegistry,
+              makeAdapterRegistryMock({
+                [harness.provider]: { ...harness.adapter, startSession, stopSession, sendTurn },
+              }),
+            ),
+          ),
+          Layer.provide(
+            Layer.succeed(ProviderSessionDirectory.ProviderSessionDirectory, directory),
+          ),
+          Layer.provide(Layer.succeed(ProjectionSnapshotQuery.ProjectionSnapshotQuery, snapshots)),
+          Layer.provide(Layer.succeed(ProviderEventLoggers, NoOpProviderEventLoggers)),
+          Layer.provide(AnalyticsService.layerTest),
+          Layer.provide(ServerSettingsService.layerTest()),
+        );
+        const stages = yield* Effect.gen(function* () {
+          const doctor = yield* Doctor.ProviderDoctor;
+          const approvals = yield* Approvals.WorkflowApprovals;
+          const input = {
+            instanceId: "codex",
+            runId: "consented-fixture",
+            tier: "full" as const,
+            model: "gpt-5",
+          };
+          expect(
+            (yield* doctor.run(input, { trustedOperator: false }).pipe(Effect.result))._tag,
+          ).toBe("Failure");
+          expect(startSession).not.toHaveBeenCalled();
+          const reviewed = providerDoctorApprovalReview(input);
+          const approvalId = yield* approvals.grant({ ...reviewed, humanSessionId: "operator" });
+          const approved = { input, approvalId };
+          const human = { humanSessionId: "operator" };
+          expect(
+            (yield* doctor.runApproved(approved, { humanSessionId: "foreign" }).pipe(Effect.result))
+              ._tag,
+          ).toBe("Failure");
+          expect(
+            (yield* doctor
+              .runApproved({ ...approved, input: { ...input, model: "different" } }, human)
+              .pipe(Effect.result))._tag,
+          ).toBe("Failure");
+          expect(startSession).not.toHaveBeenCalled();
+          const running = yield* doctor.runApproved(approved, human).pipe(Effect.forkScoped);
+          yield* Deferred.await(sending).pipe(
+            Effect.raceFirst(
+              Fiber.join(running).pipe(
+                Effect.flatMap(() =>
+                  Effect.die("Diagnostic completed before reaching the native send receipt."),
+                ),
+              ),
+            ),
+          );
+          const reserved = yield* doctor.runApproved(approved, human);
+          expect(reserved.stages.find((stage) => stage.name === "inference")?.status).toBe(
+            "unavailable",
+          );
+          expect(startSession).toHaveBeenCalledTimes(1);
+          yield* Deferred.succeed(release, undefined);
+          const completed = yield* Fiber.join(running);
+          expect(yield* doctor.runApproved(approved, human)).toEqual(completed);
+          yield* doctor.remove(input.runId, { trustedOperator: true });
+          expect(yield* doctor.get(input.runId)).toBeNull();
+          expect((yield* doctor.runApproved(approved, human).pipe(Effect.result))._tag).toBe(
+            "Failure",
+          );
+          expect(startSession).toHaveBeenCalledTimes(1);
+          yield* harness.queueTurnResponseForNextSession({ events: [] });
+          const cancelledInput = { ...input, runId: "cancelled-fixture" };
+          const cancelledApproval = yield* approvals.grant({
+            ...providerDoctorApprovalReview(cancelledInput),
+            humanSessionId: "operator",
+          });
+          const cancelling = yield* doctor
+            .runApproved({ input: cancelledInput, approvalId: cancelledApproval }, human)
+            .pipe(Effect.forkScoped);
+          yield* Deferred.await(cancelSending).pipe(
+            Effect.raceFirst(
+              Fiber.join(cancelling).pipe(
+                Effect.flatMap(() => Effect.die("Cancelled diagnostic completed before dispatch.")),
+              ),
+            ),
+          );
+          expect(
+            (yield* doctor
+              .cancel(cancelledInput.runId, { humanSessionId: "foreign" })
+              .pipe(Effect.result))._tag,
+          ).toBe("Failure");
+          expect(yield* doctor.cancel(cancelledInput.runId, human)).toBe(true);
+          yield* Fiber.await(cancelling);
+          expect(yield* doctor.cancel(cancelledInput.runId, human)).toBe(false);
+          expect(harness.listActiveSessionIds()).toEqual([]);
+          const cancelledSession = startSession.mock.calls[1]?.[0];
+          expect(Option.isNone(yield* directory.getBinding(cancelledSession!.threadId))).toBe(true);
+          expect(yield* fs.exists(cancelledSession!.cwd!)).toBe(false);
+          return completed.stages;
+        }).pipe(
+          Effect.provide(
+            Doctor.layer.pipe(
+              Layer.provideMerge(Approvals.layer),
+              Layer.provide(DiagnosticRunner.layer),
+              Layer.provide(providerLayer),
+              Layer.provide(
+                makeProviderRegistryLayer([
+                  {
+                    instanceId: ProviderInstanceId.make("codex"),
+                    driver: harness.provider,
+                    enabled: true,
+                    installed: true,
+                    version: "fixture",
+                    status: "ready",
+                    auth: { status: "authenticated" },
+                    checkedAt: "2026-10-03T00:00:00.000Z",
+                    models: [],
+                    slashCommands: [],
+                    skills: [],
+                  },
+                ]),
+              ),
+            ),
+          ),
+        );
+        expect(stages.find((stage) => stage.name === "inference")?.status).toBe("passed");
+        expect(stages.find((stage) => stage.name === "cleanup")?.status).toBe("passed");
+        const started = startSession.mock.calls[0]?.[0];
+        expect(started).toMatchObject({
+          runtimeMode: "approval-required",
+          sandboxMode: "read-only",
+          approvalPolicy: "untrusted",
+        });
+        expect(started?.resumeCursor).toBeUndefined();
+        expect(stopSession).toHaveBeenCalledTimes(2);
+        expect(stopSession.mock.calls[0]?.[0]).toBe(started?.threadId);
+        expect(yield* fs.exists(started!.cwd!)).toBe(false);
+        expect(Option.isNone(yield* directory.getBinding(started!.threadId))).toBe(true);
+        expect(Option.isNone(yield* snapshots.getThreadDetailById(started!.threadId))).toBe(true);
+      }),
+  );
   it.effect(
     "handoff reactor waits for the owned native stop before starting a fresh epoch without a cursor",
     () =>

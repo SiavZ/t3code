@@ -1,6 +1,7 @@
 // @effect-diagnostics nodeBuiltinImport:off
 import * as NodeHttp from "node:http";
 import * as GlobalMemory from "./memory/GlobalMemory.ts";
+import * as WorkflowApprovals from "./integrations/WorkflowApprovals.ts";
 
 import * as NodeHttpServer from "@effect/platform-node/NodeHttpServer";
 import * as NodeServices from "@effect/platform-node/NodeServices";
@@ -172,6 +173,8 @@ import * as RuntimeHooks from "./provider/RuntimeHooks.ts";
 import * as IntegrationConfiguration from "./integrations/IntegrationConfiguration.ts";
 import * as RuntimeHookObservers from "./provider/RuntimeHookObservers.ts";
 import * as SharedWorkspaceActivity from "./workspace/SharedWorkspaceActivity.ts";
+import * as ProviderDiagnosticRunner from "./provider/ProviderDiagnosticRunner.ts";
+import * as ProviderDoctor from "./provider/ProviderDoctor.ts";
 import * as ExternalHistoryReaders from "./project/ExternalHistoryReaders.ts";
 import * as AgentSessionScanner from "./project/AgentSessionScanner.ts";
 import * as WorkspaceAgentSearch from "./workspace/WorkspaceAgentSearch.ts";
@@ -541,6 +544,12 @@ const ProviderRuntimeLayerLive = ProviderSessionReaperLive.pipe(
       AgentDocumentAssets.layer,
       ThreadRuntimeService.layer,
       RuntimeHooks.layer.pipe(Layer.provide(ProcessRunner.layer)),
+      ProviderDoctor.layer.pipe(
+        Layer.provide(WorkflowApprovals.layer),
+        Layer.provide(
+          ProviderDiagnosticRunner.layer.pipe(Layer.provide(ProviderSessionRuntime.layer)),
+        ),
+      ),
     ),
   ),
   Layer.provideMerge(ProviderLayerLive.pipe(Layer.provideMerge(SharedWorkspaceActivity.layer))),

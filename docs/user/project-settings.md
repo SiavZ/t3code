@@ -90,6 +90,16 @@ of the exact request. Cancelling a local wait does not guarantee cancellation of
 an upstream paid request. Native Mac control additionally requires consent on
 the connected desktop host and stops when that host connection is lost.
 
+## Provider diagnostics
+
+On web and desktop, select a provider instance in **Settings → Providers** to
+run manual diagnostics for that environment. Offline checks use cached state.
+Catalog checks may start a provider process or make network requests. A full
+diagnostic requires an administrator to review the exact provider and model,
+and may consume quota or incur billing. It uses a disposable session rather
+than your conversation. Results describe the checks performed, not a guarantee
+that every native tool or provider feature works.
+
 ## Storage cleanup
 
 Open **Settings → Storage** to enable automatic cleanup on one machine or all connected

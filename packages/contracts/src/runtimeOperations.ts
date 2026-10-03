@@ -51,6 +51,45 @@ export const RuntimeOperationReceipt = Schema.Struct({
   createdAt: IsoDateTime,
 });
 export type RuntimeOperationReceipt = typeof RuntimeOperationReceipt.Type;
+export const ProviderDoctorInput = Schema.Struct({
+  instanceId: text(200),
+  tier: Schema.Literals(["offline", "catalog", "full"]),
+  runId: text(120),
+  model: Schema.optional(text(200)),
+});
+export type ProviderDoctorInput = typeof ProviderDoctorInput.Type;
+export const ProviderDoctorApprovedInput = Schema.Struct({
+  input: ProviderDoctorInput,
+  approvalId: text(200),
+});
+export type ProviderDoctorApprovedInput = typeof ProviderDoctorApprovedInput.Type;
+export const providerDoctorApprovalReview = (input: ProviderDoctorInput) => ({
+  operation: "provider.doctor.full",
+  review: JSON.stringify({
+    runId: input.runId,
+    instanceId: input.instanceId,
+    model: input.model ?? null,
+    tier: input.tier,
+    potentialCost: "quota-or-billing",
+    workspace: "disposable",
+    toolAuthority: "no approvals or arbitrary shell tools",
+  }),
+});
+export const ProviderDoctorResult = Schema.Struct({
+  instanceId: Schema.String,
+  tier: Schema.Literals(["offline", "catalog", "full"]),
+  runId: Schema.String,
+  checkedAt: IsoDateTime,
+  potentialCost: Schema.Literals(["none", "network-or-process", "quota-or-billing"]),
+  stages: Schema.Array(
+    Schema.Struct({
+      name: Schema.String,
+      status: Schema.Literals(["passed", "failed", "skipped", "unavailable"]),
+      detail: Schema.String,
+    }),
+  ),
+});
+export type ProviderDoctorResult = typeof ProviderDoctorResult.Type;
 export class RuntimeOperationError extends Schema.TaggedError<RuntimeOperationError>()(
   "RuntimeOperationError",
   {

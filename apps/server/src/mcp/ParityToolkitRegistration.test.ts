@@ -237,6 +237,7 @@ const registrationHandlers = Layer.mergeAll(
     runtime_metadata: uncalled,
     runtime_fork: uncalled,
     runtime_handoff: uncalled,
+    runtime_doctor_offline: uncalled,
   }),
   IntegrationsToolkit.toLayer({
     integrations_catalog_status: uncalled,
@@ -282,7 +283,7 @@ it.effect("all added toolkits register through the MCP server", () =>
       yield* McpServer.registerToolkit(RuntimeToolkit);
       yield* McpServer.registerToolkit(IntegrationsToolkit);
       const server = yield* McpServer.McpServer;
-      expect(server.tools.length).toBe(81);
+      expect(server.tools.length).toBe(82);
       for (const { tool } of server.tools) expect(tool.inputSchema.type, tool.name).toBe("object");
     }).pipe(Effect.provide(registrationHandlers), Effect.provide(registered)),
   ),

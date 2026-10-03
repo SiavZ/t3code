@@ -38,6 +38,7 @@ describe("RPC authorization scopes", () => {
       WS_METHODS.skillsRead,
       WS_METHODS.externalMcpList,
       WS_METHODS.externalMcpSearch,
+      WS_METHODS.providerDoctorGet,
     ])
       expect(requiredScopeForRpcMethod(method)).toBe(AuthOrchestrationReadScope);
     for (const method of [
@@ -78,6 +79,8 @@ describe("RPC authorization scopes", () => {
       WS_METHODS.gmailDisconnect,
       WS_METHODS.desktopConnect,
       WS_METHODS.memoryGlobalRead,
+      WS_METHODS.providerDoctorRunApproved,
+      WS_METHODS.providerDoctorCancel,
       WS_METHODS.memoryGlobalWrite,
       WS_METHODS.desktopAuthorize,
       WS_METHODS.desktopRespond,

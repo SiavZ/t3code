@@ -688,6 +688,15 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
     options?.issueMcpCredential ?? McpSessionRegistry.issueActiveMcpCredential;
   const fileSystem = yield* FileSystem.FileSystem;
   const pathService = yield* Path.Path;
+  const issuedDiagnosticIds = new Set<ThreadId>();
+  const diagnosticScopes = new Map<
+    ThreadId,
+    {
+      readonly instanceId: ProviderInstanceId;
+      readonly provider: ProviderDriverKind;
+      readonly adapter: ProviderAdapterShape<ProviderAdapterError>;
+    }
+  >();
   const runtimeEventPubSub = yield* PubSub.unbounded<ProviderRuntimeEvent>();
   const pendingCompactions = new Map<ThreadId, PendingCompaction>();
   const timedOutNativeCompactions = new Set<ThreadId>();
@@ -1089,78 +1098,84 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
     requested: unknown,
     operation: string,
     instanceId?: ProviderInstanceId,
+    launchArgumentsOnly = false,
   ) {
-    if (Option.isNone(projectionQuery)) return;
-    const initial = yield* projectionQuery.value
-      .getThreadShellById(threadId)
-      .pipe(
-        Effect.mapError((cause) =>
-          toValidationError(operation, "Could not verify worker permissions.", cause),
-        ),
-      );
-    if (Option.isNone(initial)) {
-      const metadata = yield* projectionQuery.value
-        .getWorkerSpawnMetadata(threadId)
+    if (!launchArgumentsOnly) {
+      if (Option.isNone(projectionQuery)) return;
+      const initial = yield* projectionQuery.value
+        .getThreadShellById(threadId)
         .pipe(
           Effect.mapError((cause) =>
-            toValidationError(operation, "Could not verify worker identity.", cause),
+            toValidationError(operation, "Could not verify worker permissions.", cause),
           ),
         );
-      if (Option.isSome(metadata)) {
+      if (Option.isNone(initial)) {
+        const metadata = yield* projectionQuery.value
+          .getWorkerSpawnMetadata(threadId)
+          .pipe(
+            Effect.mapError((cause) =>
+              toValidationError(operation, "Could not verify worker identity.", cause),
+            ),
+          );
+        if (Option.isSome(metadata)) {
+          return yield* toValidationError(
+            operation,
+            "Deleted workers cannot start or resume execution.",
+          );
+        }
+        return;
+      }
+      const unattendedOrigin = yield* Effect.serviceOption(NativeUnattendedActivation);
+      if (!initial.value.worker && Option.isNone(unattendedOrigin)) return;
+      if (initial.value.worker?.stopRequestedAt != null) {
         return yield* toValidationError(
           operation,
-          "Deleted workers cannot start or resume execution.",
+          "Worker execution was stopped. Send an explicit follow-up to resume it.",
         );
       }
-      return;
-    }
-    const unattendedOrigin = yield* Effect.serviceOption(NativeUnattendedActivation);
-    if (!initial.value.worker && Option.isNone(unattendedOrigin)) return;
-    if (initial.value.worker?.stopRequestedAt != null) {
-      return yield* toValidationError(
-        operation,
-        "Worker execution was stopped. Send an explicit follow-up to resume it.",
-      );
-    }
-    if (!isRuntimeMode(requested)) {
-      return yield* toValidationError(operation, "Worker runtime mode is invalid.");
-    }
-    let current = initial.value;
-    const visited = new Set<ThreadId>();
-    while (current.worker) {
-      const metadata = current.worker;
-      if (
-        visited.has(current.id) ||
-        visited.size >= 2 ||
-        !isWorkerRuntimeModeAllowed(requested, metadata.runtimeModeCeiling)
-      ) {
+      if (!isRuntimeMode(requested)) {
+        return yield* toValidationError(operation, "Worker runtime mode is invalid.");
+      }
+      let current = initial.value;
+      const visited = new Set<ThreadId>();
+      while (current.worker) {
+        const metadata = current.worker;
+        if (
+          visited.has(current.id) ||
+          visited.size >= 2 ||
+          !isWorkerRuntimeModeAllowed(requested, metadata.runtimeModeCeiling)
+        ) {
+          return yield* toValidationError(
+            operation,
+            "Worker runtime mode exceeds its inherited ceiling.",
+          );
+        }
+        visited.add(current.id);
+        const owner = yield* projectionQuery.value
+          .getThreadShellById(metadata.ownerThreadId)
+          .pipe(
+            Effect.mapError((cause) =>
+              toValidationError(operation, "Could not verify worker owner permissions.", cause),
+            ),
+          );
+        if (
+          Option.isNone(owner) ||
+          owner.value.projectId !== initial.value.projectId ||
+          !isWorkerRuntimeModeAllowed(requested, owner.value.runtimeMode)
+        ) {
+          return yield* toValidationError(
+            operation,
+            "Worker runtime mode exceeds its owner's permissions.",
+          );
+        }
+        current = owner.value;
+      }
+      if (initial.value.worker && current.id !== initial.value.worker.rootThreadId) {
         return yield* toValidationError(
           operation,
-          "Worker runtime mode exceeds its inherited ceiling.",
+          "Worker root does not match its ownership chain.",
         );
       }
-      visited.add(current.id);
-      const owner = yield* projectionQuery.value
-        .getThreadShellById(metadata.ownerThreadId)
-        .pipe(
-          Effect.mapError((cause) =>
-            toValidationError(operation, "Could not verify worker owner permissions.", cause),
-          ),
-        );
-      if (
-        Option.isNone(owner) ||
-        owner.value.projectId !== initial.value.projectId ||
-        !isWorkerRuntimeModeAllowed(requested, owner.value.runtimeMode)
-      ) {
-        return yield* toValidationError(
-          operation,
-          "Worker runtime mode exceeds its owner's permissions.",
-        );
-      }
-      current = owner.value;
-    }
-    if (initial.value.worker && current.id !== initial.value.worker.rootThreadId) {
-      return yield* toValidationError(operation, "Worker root does not match its ownership chain.");
     }
     if (!isRuntimeMode(requested)) {
       return yield* toValidationError(operation, "Restricted native runtime mode is invalid.");
@@ -1293,6 +1308,7 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
 
   const prepareMcpSession = (threadId: ThreadId, providerInstanceId: ProviderInstanceId) =>
     Effect.gen(function* () {
+      if (diagnosticScopes.has(threadId)) return undefined;
       const capabilities = yield* agentAccessCapabilities(threadId);
       const credential = yield* issueMcpCredential({
         threadId,
@@ -1436,6 +1452,7 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
     source: {
       readonly instanceId: ProviderInstanceId;
       readonly provider: ProviderDriverKind;
+      readonly adapter: ProviderAdapterShape<ProviderAdapterError>;
     },
     event: ProviderRuntimeEvent,
   ): Effect.Effect<void> =>
@@ -1455,7 +1472,18 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
             ),
           );
         if (thread === undefined) return;
-        if (Option.isNone(thread)) return;
+        if (Option.isNone(thread)) {
+          const diagnostic = diagnosticScopes.get(event.threadId);
+          if (
+            diagnostic?.instanceId === source.instanceId &&
+            diagnostic.provider === source.provider &&
+            diagnostic.adapter === source.adapter &&
+            canonicalEvent.runtimeEpochId === undefined
+          )
+            yield* publishRuntimeEvent(canonicalEvent);
+          return;
+        }
+        if (issuedDiagnosticIds.has(event.threadId)) return;
         if (
           thread.value.runtimeHandoff?.status === "pending" ||
           thread.value.runtimeEpochId !== canonicalEvent.runtimeEpochId
@@ -1583,6 +1611,7 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
             {
               instanceId: id,
               provider: adapter.provider,
+              adapter,
             },
             event,
           ),
@@ -1604,6 +1633,12 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
     readonly operation: string;
   }) {
     const activationOrigin = yield* captureNativeOrigin(input.binding.threadId);
+    if (diagnosticScopes.has(input.binding.threadId)) {
+      return yield* toValidationError(
+        input.operation,
+        "Disposable diagnostic sessions cannot be resumed.",
+      );
+    }
     const bindingInstanceId = yield* requireBindingInstanceId(input.operation, input.binding);
     yield* Effect.annotateCurrentSpan({
       "provider.operation": "recover-session",
@@ -1845,254 +1880,336 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
     );
   });
 
-  const startSession: ProviderServiceMethod<"startSession"> = Effect.fn("startSession")(
-    function* (threadId, rawInput) {
-      const activationOrigin = yield* captureNativeOrigin(threadId);
-      const parsed = yield* decodeInputOrValidationError({
-        operation: "ProviderService.startSession",
-        schema: ProviderSessionStartInput,
-        payload: rawInput,
-      });
+  const startSessionWithOrigin = Effect.fn("startSession")(function* (
+    threadId: ThreadId,
+    rawInput: typeof ProviderSessionStartInput.Type,
+    diagnostic = false,
+  ) {
+    const activationOrigin = yield* captureNativeOrigin(threadId);
+    const parsed = yield* decodeInputOrValidationError({
+      operation: "ProviderService.startSession",
+      schema: ProviderSessionStartInput,
+      payload: rawInput,
+    });
 
-      const resolvedInstanceId = yield* requireBindingInstanceId(
-        "ProviderService.startSession",
-        parsed,
-      );
-      yield* requireWorkerRuntimeMode(
+    const resolvedInstanceId = yield* requireBindingInstanceId(
+      "ProviderService.startSession",
+      parsed,
+    );
+    yield* requireWorkerRuntimeMode(
+      threadId,
+      parsed.runtimeMode,
+      "ProviderService.startSession",
+      resolvedInstanceId,
+    );
+    let metricProvider = parsed.provider ?? String(resolvedInstanceId);
+    yield* Effect.annotateCurrentSpan({
+      "provider.operation": "start-session",
+      "provider.instance_id": resolvedInstanceId,
+      "provider.thread_id": threadId,
+      "provider.runtime_mode": parsed.runtimeMode,
+    });
+    return yield* Effect.gen(function* () {
+      yield* requireAcknowledgedLifecycle(threadId, "ProviderService.startSession");
+      if (!diagnostic && issuedDiagnosticIds.has(threadId)) {
+        return yield* toValidationError(
+          "ProviderService.startSession",
+          "Thread is reserved by a disposable diagnostic session.",
+        );
+      }
+      const instanceInfo = yield* registry.getInstanceInfo(resolvedInstanceId);
+      const resolvedProvider = instanceInfo.driverKind;
+      metricProvider = resolvedProvider;
+      if (parsed.provider !== undefined && parsed.provider !== resolvedProvider) {
+        return yield* toValidationError(
+          "ProviderService.startSession",
+          `Provider instance '${resolvedInstanceId}' belongs to driver '${resolvedProvider}', not '${parsed.provider}'.`,
+        );
+      }
+      const input = {
+        ...parsed,
         threadId,
-        parsed.runtimeMode,
-        "ProviderService.startSession",
-        resolvedInstanceId,
-      );
-      let metricProvider = parsed.provider ?? String(resolvedInstanceId);
-      yield* Effect.annotateCurrentSpan({
-        "provider.operation": "start-session",
-        "provider.instance_id": resolvedInstanceId,
-        "provider.thread_id": threadId,
-        "provider.runtime_mode": parsed.runtimeMode,
-      });
-      return yield* Effect.gen(function* () {
-        yield* requireAcknowledgedLifecycle(threadId, "ProviderService.startSession");
-        const instanceInfo = yield* registry.getInstanceInfo(resolvedInstanceId);
-        const resolvedProvider = instanceInfo.driverKind;
-        metricProvider = resolvedProvider;
-        if (parsed.provider !== undefined && parsed.provider !== resolvedProvider) {
-          return yield* toValidationError(
-            "ProviderService.startSession",
-            `Provider instance '${resolvedInstanceId}' belongs to driver '${resolvedProvider}', not '${parsed.provider}'.`,
-          );
-        }
-        const input = {
-          ...parsed,
-          threadId,
-          provider: resolvedProvider,
-        };
-        if (Option.isNone(projectionQuery) && input.runtimeEpochId !== undefined) {
-          return yield* toValidationError(
-            "ProviderService.startSession",
-            "Could not verify provider runtime epoch.",
-          );
-        }
-        if (Option.isSome(projectionQuery)) {
-          const runtimeContext = yield* projectionQuery.value
-            .getThreadRuntimeContext(threadId)
-            .pipe(
-              Effect.mapError((cause) =>
-                toValidationError(
-                  "ProviderService.startSession",
-                  "Could not verify provider runtime epoch.",
-                  cause,
-                ),
+        provider: resolvedProvider,
+      };
+      if (Option.isNone(projectionQuery) && input.runtimeEpochId !== undefined) {
+        return yield* toValidationError(
+          "ProviderService.startSession",
+          "Could not verify provider runtime epoch.",
+        );
+      }
+      if (Option.isSome(projectionQuery)) {
+        const runtimeContext = yield* projectionQuery.value
+          .getThreadRuntimeContext(threadId)
+          .pipe(
+            Effect.mapError((cause) =>
+              toValidationError(
+                "ProviderService.startSession",
+                "Could not verify provider runtime epoch.",
+                cause,
               ),
-            );
-          if (
-            (Option.isNone(runtimeContext) && input.runtimeEpochId !== undefined) ||
-            (Option.isSome(runtimeContext) &&
-              (runtimeContext.value.runtimeHandoff?.status === "pending" ||
-                runtimeContext.value.runtimeEpochId !== input.runtimeEpochId))
-          ) {
-            return yield* toValidationError(
-              "ProviderService.startSession",
-              "Provider runtime epoch changed or handoff is pending.",
-            );
-          }
-        }
-        if (!instanceInfo.enabled) {
+            ),
+          );
+        if (
+          (Option.isNone(runtimeContext) && input.runtimeEpochId !== undefined) ||
+          (Option.isSome(runtimeContext) &&
+            (runtimeContext.value.runtimeHandoff?.status === "pending" ||
+              runtimeContext.value.runtimeEpochId !== input.runtimeEpochId))
+        ) {
           return yield* toValidationError(
             "ProviderService.startSession",
-            `Provider instance '${resolvedInstanceId}' is disabled in T3 Code settings.`,
+            "Provider runtime epoch changed or handoff is pending.",
           );
         }
-        const persistedBinding = Option.getOrUndefined(yield* directory.getBinding(threadId));
+      }
+      if (!instanceInfo.enabled) {
+        return yield* toValidationError(
+          "ProviderService.startSession",
+          `Provider instance '${resolvedInstanceId}' is disabled in T3 Code settings.`,
+        );
+      }
+      const persistedBinding = Option.getOrUndefined(yield* directory.getBinding(threadId));
+      if (
+        persistedBinding?.provider === resolvedProvider &&
+        persistedBinding.providerInstanceId !== resolvedInstanceId &&
+        (input.resumeCursor != null || persistedBinding.resumeCursor != null)
+      ) {
+        const previousInstanceId = yield* requireBindingInstanceId(
+          "ProviderService.startSession",
+          persistedBinding,
+        );
+        const previousInfo = yield* registry.getInstanceInfo(previousInstanceId);
         if (
-          persistedBinding?.provider === resolvedProvider &&
-          persistedBinding.providerInstanceId !== resolvedInstanceId &&
-          (input.resumeCursor != null || persistedBinding.resumeCursor != null)
+          previousInfo.continuationIdentity.continuationKey !==
+          instanceInfo.continuationIdentity.continuationKey
         ) {
-          const previousInstanceId = yield* requireBindingInstanceId(
+          return yield* toValidationError(
             "ProviderService.startSession",
-            persistedBinding,
+            `Thread '${threadId}' cannot switch from instance '${previousInstanceId}' to '${resolvedInstanceId}' because their provider resume state is incompatible.`,
           );
-          const previousInfo = yield* registry.getInstanceInfo(previousInstanceId);
-          if (
-            previousInfo.continuationIdentity.continuationKey !==
-            instanceInfo.continuationIdentity.continuationKey
-          ) {
-            return yield* toValidationError(
-              "ProviderService.startSession",
-              `Thread '${threadId}' cannot switch from instance '${previousInstanceId}' to '${resolvedInstanceId}' because their provider resume state is incompatible.`,
-            );
-          }
         }
-        const effectiveResumeCursor =
-          input.resumeCursor ??
-          (persistedBinding?.providerInstanceId === resolvedInstanceId
-            ? persistedBinding.resumeCursor
-            : undefined);
-        const effectiveCwd =
-          input.cwd ??
-          (persistedBinding?.providerInstanceId === resolvedInstanceId
-            ? readPersistedCwd(persistedBinding.runtimePayload)
-            : undefined);
-        yield* Effect.annotateCurrentSpan({
-          "provider.kind": resolvedProvider,
-          "provider.resume_cursor.source":
-            input.resumeCursor !== undefined
-              ? "request"
-              : effectiveResumeCursor !== undefined &&
-                  persistedBinding?.providerInstanceId === resolvedInstanceId
-                ? "persisted"
-                : "none",
-          "provider.resume_cursor.present": effectiveResumeCursor !== undefined,
-          "provider.cwd.source":
-            input.cwd !== undefined
-              ? "request"
-              : effectiveCwd !== undefined &&
-                  persistedBinding?.providerInstanceId === resolvedInstanceId
-                ? "persisted"
-                : "none",
-          "provider.cwd.effective": effectiveCwd ?? "",
-        });
-        if (effectiveCwd !== undefined) {
-          // Fail fast with an actionable error when the workspace folder is
-          // gone (e.g. moved, deleted, or replaced by a plain file).
-          // Otherwise every adapter surfaces this as a misleading "failed to
-          // spawn <binary>" process error. Stat failures other than "missing"
-          // fall through to the adapter.
-          const workspaceIsDirectory = yield* fileSystem.stat(effectiveCwd).pipe(
-            Effect.map((workspaceStat) => workspaceStat.type === "Directory"),
-            Effect.catch((statError) => Effect.succeed(statError.reason._tag !== "NotFound")),
+      }
+      const effectiveResumeCursor =
+        input.resumeCursor ??
+        (persistedBinding?.providerInstanceId === resolvedInstanceId
+          ? persistedBinding.resumeCursor
+          : undefined);
+      const effectiveCwd =
+        input.cwd ??
+        (persistedBinding?.providerInstanceId === resolvedInstanceId
+          ? readPersistedCwd(persistedBinding.runtimePayload)
+          : undefined);
+      yield* Effect.annotateCurrentSpan({
+        "provider.kind": resolvedProvider,
+        "provider.resume_cursor.source":
+          input.resumeCursor !== undefined
+            ? "request"
+            : effectiveResumeCursor !== undefined &&
+                persistedBinding?.providerInstanceId === resolvedInstanceId
+              ? "persisted"
+              : "none",
+        "provider.resume_cursor.present": effectiveResumeCursor !== undefined,
+        "provider.cwd.source":
+          input.cwd !== undefined
+            ? "request"
+            : effectiveCwd !== undefined &&
+                persistedBinding?.providerInstanceId === resolvedInstanceId
+              ? "persisted"
+              : "none",
+        "provider.cwd.effective": effectiveCwd ?? "",
+      });
+      if (effectiveCwd !== undefined) {
+        // Fail fast with an actionable error when the workspace folder is
+        // gone (e.g. moved, deleted, or replaced by a plain file).
+        // Otherwise every adapter surfaces this as a misleading "failed to
+        // spawn <binary>" process error. Stat failures other than "missing"
+        // fall through to the adapter.
+        const workspaceIsDirectory = yield* fileSystem.stat(effectiveCwd).pipe(
+          Effect.map((workspaceStat) => workspaceStat.type === "Directory"),
+          Effect.catch((statError) => Effect.succeed(statError.reason._tag !== "NotFound")),
+        );
+        if (!workspaceIsDirectory) {
+          return yield* new ProviderWorkspaceMissingError({ threadId, cwd: effectiveCwd });
+        }
+      }
+      const adapter = yield* registry.getByInstance(resolvedInstanceId);
+      if (diagnostic) {
+        if (
+          input.threadId !== threadId ||
+          input.runtimeEpochId !== undefined ||
+          input.resumeCursor !== undefined ||
+          input.runtimeMode !== "approval-required" ||
+          input.sandboxMode !== "read-only" ||
+          input.approvalPolicy !== "untrusted" ||
+          input.providerInstanceId === undefined ||
+          input.modelSelection?.instanceId !== resolvedInstanceId ||
+          input.cwd === undefined ||
+          !pathService.isAbsolute(input.cwd) ||
+          Option.isNone(projectionQuery)
+        )
+          return yield* toValidationError(
+            "ProviderService.startDiagnosticSession",
+            "Diagnostics require a fresh untrusted read-only session with an explicit model and absolute disposable workspace.",
           );
-          if (!workspaceIsDirectory) {
-            return yield* new ProviderWorkspaceMissingError({ threadId, cwd: effectiveCwd });
-          }
+        const durable = yield* projectionQuery.value
+          .getThreadRuntimeContext(threadId)
+          .pipe(
+            Effect.mapError((cause) =>
+              toValidationError(
+                "ProviderService.startDiagnosticSession",
+                "Could not verify disposable diagnostic ownership.",
+                cause,
+              ),
+            ),
+          );
+        if (
+          Option.isSome(durable) ||
+          persistedBinding ||
+          issuedDiagnosticIds.has(threadId) ||
+          (yield* adapter.hasSession(threadId))
+        ) {
+          return yield* toValidationError(
+            "ProviderService.startDiagnosticSession",
+            "Diagnostic session cannot reuse a durable or existing native thread.",
+          );
         }
-        const adapter = yield* registry.getByInstance(resolvedInstanceId);
-        yield* clearTurnAnalyticsSession(resolvedInstanceId, threadId);
-        yield* requireNativeAuthority(
-          threadId,
-          input.runtimeMode,
-          "ProviderService.startSession",
-          activationOrigin,
-          resolvedInstanceId,
-        );
-        yield* activationOrigin
-          ? prepareMcpSession(threadId, resolvedInstanceId).pipe(
-              Effect.provideService(NativeUnattendedActivation, activationOrigin),
-            )
-          : prepareMcpSession(threadId, resolvedInstanceId);
-        yield* requireNativeAuthority(
-          threadId,
-          input.runtimeMode,
-          "ProviderService.startSession",
-          activationOrigin,
-          resolvedInstanceId,
-        );
-        const session = yield* adapter
-          .startSession({
-            ...input,
-            providerInstanceId: resolvedInstanceId,
-            ...(effectiveCwd !== undefined ? { cwd: effectiveCwd } : {}),
-            ...(effectiveResumeCursor !== undefined ? { resumeCursor: effectiveResumeCursor } : {}),
-          })
-          .pipe(Effect.onError(() => clearMcpSession(threadId)));
-
         yield* requireWorkerRuntimeMode(
           threadId,
-          session.runtimeMode,
-          "ProviderService.startSession",
+          input.runtimeMode,
+          "ProviderService.startDiagnosticSession",
           resolvedInstanceId,
-        ).pipe(
-          Effect.andThen(
-            requireNativeAuthority(
-              threadId,
-              session.runtimeMode,
-              "ProviderService.startSession",
-              activationOrigin,
-              resolvedInstanceId,
-            ),
-          ),
-          Effect.andThen(
-            requireRuntimeEpoch(threadId, input.runtimeEpochId, "ProviderService.startSession"),
-          ),
-          Effect.onError(() => stopRejectedNativeSession(threadId, adapter, resolvedInstanceId)),
+          true,
         );
-        if (session.provider !== adapter.provider) {
-          yield* clearMcpSession(threadId);
-          return yield* toValidationError(
-            "ProviderService.startSession",
-            `Adapter/provider mismatch: requested '${adapter.provider}', received '${session.provider}'.`,
-          );
-        }
-        const sessionWithInstance = {
-          ...session,
-          providerInstanceId: resolvedInstanceId,
-        };
-
-        yield* stopStaleSessionsForThread({
-          threadId,
-          currentInstanceId: resolvedInstanceId,
+        issuedDiagnosticIds.add(threadId);
+        diagnosticScopes.set(threadId, {
+          instanceId: resolvedInstanceId,
+          provider: resolvedProvider,
+          adapter,
         });
-        yield* upsertSessionBinding(sessionWithInstance, threadId, {
-          modelSelection: input.modelSelection,
-        });
-        yield* analytics.record("provider.session.started", {
-          provider: sessionWithInstance.provider,
-          runtimeMode: input.runtimeMode,
-          hasResumeCursor: sessionWithInstance.resumeCursor !== undefined,
-          hasCwd: typeof effectiveCwd === "string" && effectiveCwd.trim().length > 0,
-          hasModel:
-            typeof input.modelSelection?.model === "string" &&
-            input.modelSelection.model.trim().length > 0,
-        });
-        timedOutNativeCompactions.delete(threadId);
-
-        // Changing runtime mode restarts the session, so the transition is only
-        // observable here, by diffing against the mode the previous session for
-        // this thread was bound to. Recording it separately is what makes the
-        // "started supervised, switched to full access" funnel answerable.
-        const previousRuntimeMode = persistedBinding?.runtimeMode;
-        if (previousRuntimeMode !== undefined && previousRuntimeMode !== input.runtimeMode) {
-          yield* analytics.record("provider.runtime_mode.changed", {
-            provider: sessionWithInstance.provider,
-            from: previousRuntimeMode,
-            to: input.runtimeMode,
-          });
-        }
-
-        return sessionWithInstance;
-      }).pipe(
-        nativeLifecycle(threadId).lock.withPermits(1),
-        withMetrics({
-          counter: providerSessionsTotal,
-          attributes: () =>
-            providerMetricAttributes(metricProvider, {
-              operation: "start",
-            }),
-        }),
+      }
+      yield* clearTurnAnalyticsSession(resolvedInstanceId, threadId);
+      yield* requireNativeAuthority(
+        threadId,
+        input.runtimeMode,
+        "ProviderService.startSession",
+        activationOrigin,
+        resolvedInstanceId,
       );
-    },
-  );
+      yield* activationOrigin
+        ? prepareMcpSession(threadId, resolvedInstanceId).pipe(
+            Effect.provideService(NativeUnattendedActivation, activationOrigin),
+          )
+        : prepareMcpSession(threadId, resolvedInstanceId);
+      yield* requireNativeAuthority(
+        threadId,
+        input.runtimeMode,
+        "ProviderService.startSession",
+        activationOrigin,
+        resolvedInstanceId,
+      );
+      const session = yield* adapter
+        .startSession({
+          ...input,
+          providerInstanceId: resolvedInstanceId,
+          ...(effectiveCwd !== undefined ? { cwd: effectiveCwd } : {}),
+          ...(effectiveResumeCursor !== undefined ? { resumeCursor: effectiveResumeCursor } : {}),
+        })
+        .pipe(Effect.onError(() => clearMcpSession(threadId)));
+
+      yield* requireWorkerRuntimeMode(
+        threadId,
+        session.runtimeMode,
+        "ProviderService.startSession",
+        resolvedInstanceId,
+      ).pipe(
+        Effect.andThen(
+          diagnostic && session.runtimeMode !== "approval-required"
+            ? toValidationError(
+                "ProviderService.startDiagnosticSession",
+                "Native diagnostic session exceeded its permission ceiling.",
+              )
+            : Effect.void,
+        ),
+        Effect.andThen(
+          requireNativeAuthority(
+            threadId,
+            session.runtimeMode,
+            "ProviderService.startSession",
+            activationOrigin,
+            resolvedInstanceId,
+          ),
+        ),
+        Effect.andThen(
+          requireRuntimeEpoch(threadId, input.runtimeEpochId, "ProviderService.startSession"),
+        ),
+        Effect.onError(() => stopRejectedNativeSession(threadId, adapter, resolvedInstanceId)),
+      );
+      if (session.provider !== adapter.provider) {
+        yield* clearMcpSession(threadId);
+        return yield* toValidationError(
+          "ProviderService.startSession",
+          `Adapter/provider mismatch: requested '${adapter.provider}', received '${session.provider}'.`,
+        );
+      }
+      const sessionWithInstance = {
+        ...session,
+        providerInstanceId: resolvedInstanceId,
+      };
+
+      yield* stopStaleSessionsForThread({
+        threadId,
+        currentInstanceId: resolvedInstanceId,
+      });
+      yield* upsertSessionBinding(sessionWithInstance, threadId, {
+        modelSelection: input.modelSelection,
+      });
+      yield* analytics.record("provider.session.started", {
+        provider: sessionWithInstance.provider,
+        runtimeMode: input.runtimeMode,
+        hasResumeCursor: sessionWithInstance.resumeCursor !== undefined,
+        hasCwd: typeof effectiveCwd === "string" && effectiveCwd.trim().length > 0,
+        hasModel:
+          typeof input.modelSelection?.model === "string" &&
+          input.modelSelection.model.trim().length > 0,
+      });
+      timedOutNativeCompactions.delete(threadId);
+
+      // Changing runtime mode restarts the session, so the transition is only
+      // observable here, by diffing against the mode the previous session for
+      // this thread was bound to. Recording it separately is what makes the
+      // "started supervised, switched to full access" funnel answerable.
+      const previousRuntimeMode = persistedBinding?.runtimeMode;
+      if (previousRuntimeMode !== undefined && previousRuntimeMode !== input.runtimeMode) {
+        yield* analytics.record("provider.runtime_mode.changed", {
+          provider: sessionWithInstance.provider,
+          from: previousRuntimeMode,
+          to: input.runtimeMode,
+        });
+      }
+
+      return sessionWithInstance;
+    }).pipe(
+      Effect.onError(() =>
+        Effect.sync(() => {
+          if (diagnostic) diagnosticScopes.delete(threadId);
+        }),
+      ),
+      nativeLifecycle(threadId).lock.withPermits(1),
+      withMetrics({
+        counter: providerSessionsTotal,
+        attributes: () =>
+          providerMetricAttributes(metricProvider, {
+            operation: "start",
+          }),
+      }),
+    );
+  });
+
+  const startSession: ProviderServiceMethod<"startSession"> = (threadId, input) =>
+    startSessionWithOrigin(threadId, input);
+  const startDiagnosticSession: ProviderServiceMethod<"startDiagnosticSession"> = (
+    threadId,
+    input,
+  ) => startSessionWithOrigin(threadId, input, true);
 
   const sendTurn: ProviderServiceMethod<"sendTurn"> = Effect.fn("sendTurn")(function* (rawInput) {
     const parsed = yield* decodeInputOrValidationError({
@@ -2641,10 +2758,12 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
         yield* requireNativeCancellation(conditional, "ProviderService.stopSession");
         if (conditional) yield* clearMcpSession(input.threadId);
         const rejectedNative = nativeLifecycle(input.threadId).rejectedNative;
-        const routed = rejectedNative
+        const diagnostic = diagnosticScopes.get(input.threadId);
+        const capturedNative = rejectedNative ?? diagnostic;
+        const routed = capturedNative
           ? {
-              adapter: rejectedNative.adapter,
-              instanceId: rejectedNative.instanceId,
+              adapter: capturedNative.adapter,
+              instanceId: capturedNative.instanceId,
               threadId: input.threadId,
               isActive: true,
             }
@@ -2679,6 +2798,7 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
               }),
             ),
           );
+          if (diagnostic) diagnosticScopes.delete(input.threadId);
         }
         yield* requireNativeCancellation(conditional, "ProviderService.stopSession");
         const pendingCompaction = pendingCompactions.get(input.threadId);
@@ -3029,6 +3149,7 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
 
   return {
     startSession,
+    startDiagnosticSession,
     sendTurn,
     compactThread,
     interruptTurn,
