@@ -121,6 +121,7 @@ import * as CoordinationPlans from "./orchestration/CoordinationPlans.ts";
 import * as WorkspaceAgentSearch from "./workspace/WorkspaceAgentSearch.ts";
 import * as HistorySearch from "./project/HistorySearch.ts";
 import * as SkillManagement from "./provider/SkillManagement.ts";
+import * as ExternalMcpConnections from "./mcp/ExternalMcpConnections.ts";
 import * as ProjectionSnapshotQuery from "./orchestration/Services/ProjectionSnapshotQuery.ts";
 import { ThreadDeletionReactor } from "./orchestration/Services/ThreadDeletionReactor.ts";
 import {
@@ -556,6 +557,7 @@ const makeParityToolsRpcLayer = () =>
       const agentSearch = yield* WorkspaceAgentSearch.WorkspaceAgentSearch;
       const historySearch = yield* HistorySearch.HistorySearch;
       const skillManagement = yield* SkillManagement.SkillManagement;
+      const externalMcp = yield* ExternalMcpConnections.ExternalMcpConnections;
       return ParityToolsRpcGroup.of({
         [WS_METHODS.qualitySubscribeChanges]: (input) =>
           qualityRecords.subscribe(input, { threadId: input.threadId, source: "user-reported" }),
@@ -610,6 +612,15 @@ const makeParityToolsRpcLayer = () =>
         [WS_METHODS.skillsRead]: (input) => skillManagement.read(input),
         [WS_METHODS.skillsLoad]: (input) => skillManagement.load(input),
         [WS_METHODS.skillsReload]: (input) => skillManagement.reload(input),
+        [WS_METHODS.externalMcpConfigure]: (input) => externalMcp.configure(input),
+        [WS_METHODS.externalMcpList]: () => externalMcp.list(),
+        [WS_METHODS.externalMcpConnect]: (input) => externalMcp.connect(input),
+        [WS_METHODS.externalMcpDisconnect]: (input) => externalMcp.disconnect(input),
+        [WS_METHODS.externalMcpReload]: (input) => externalMcp.reload(input),
+        [WS_METHODS.externalMcpRemove]: (input) => externalMcp.remove(input),
+        [WS_METHODS.externalMcpSearch]: (input) => externalMcp.searchTools(input),
+        [WS_METHODS.externalMcpCall]: (input) => externalMcp.callTool(input),
+        [WS_METHODS.externalMcpCancel]: (input) => externalMcp.cancelCall(input),
       });
     }),
   );
@@ -4267,6 +4278,7 @@ export const websocketRpcRouteLayer = Layer.unwrap(
     const agentSearch = yield* WorkspaceAgentSearch.WorkspaceAgentSearch;
     const historySearch = yield* HistorySearch.HistorySearch;
     const skillManagement = yield* SkillManagement.SkillManagement;
+    const externalMcp = yield* ExternalMcpConnections.ExternalMcpConnections;
     const sql = yield* SqlClient.SqlClient;
     return HttpRouter.add(
       "GET",
@@ -4333,6 +4345,9 @@ export const websocketRpcRouteLayer = Layer.unwrap(
                 ),
                 Layer.provide(Layer.succeed(HistorySearch.HistorySearch, historySearch)),
                 Layer.provide(Layer.succeed(SkillManagement.SkillManagement, skillManagement)),
+                Layer.provide(
+                  Layer.succeed(ExternalMcpConnections.ExternalMcpConnections, externalMcp),
+                ),
                 Layer.provide(
                   SourceControlDiscovery.layer.pipe(
                     Layer.provide(

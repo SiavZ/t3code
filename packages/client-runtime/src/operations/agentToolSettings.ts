@@ -33,6 +33,7 @@ export const OPTIONAL_AGENT_TOOL_DETAILS: Record<
     label: "Knowledge",
     description: "Search workspace code, conversation history and provider skills.",
   },
+  "external-mcp": { label: "External MCP", description: "Connect and invoke external MCP tools." },
 };
 
 /** Change one flag using each target's effective value, never a representative's array. */

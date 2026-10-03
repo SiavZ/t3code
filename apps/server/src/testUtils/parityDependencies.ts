@@ -14,6 +14,7 @@ import * as WorkspacePaths from "../workspace/WorkspacePaths.ts";
 import * as HistorySearch from "../project/HistorySearch.ts";
 import * as AgentSessionScanner from "../project/AgentSessionScanner.ts";
 import * as SkillManagement from "../provider/SkillManagement.ts";
+import * as ExternalMcpConnections from "../mcp/ExternalMcpConnections.ts";
 import * as Memory from "../memory/Memory.ts";
 import * as GlobalMemory from "../memory/GlobalMemory.ts";
 import * as QualityRecords from "../orchestration/QualityRecords.ts";
@@ -49,6 +50,7 @@ export const parityDependenciesLayer = parityStartupDependenciesLayer.pipe(
       WorkspaceAgentSearch.layer,
       HistorySearch.layer.pipe(Layer.provide(AgentSessionScanner.layer)),
       SkillManagement.layer,
+      ExternalMcpConnections.layer,
       Memory.layer,
       QualityRecords.layer,
       AgentDocumentAssets.layer,

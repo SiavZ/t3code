@@ -38,6 +38,7 @@ export * from "./backgroundJobs.ts";
 export * from "./agentDocuments.ts";
 export * from "./agentSearch.ts";
 export * from "./historySearch.ts";
+export * from "./externalMcp.ts";
 export * from "./skillManagement.ts";
 export * from "./t3ProjectFile.ts";
 export * from "./editor.ts";

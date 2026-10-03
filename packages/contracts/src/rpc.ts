@@ -12,6 +12,7 @@ import * as Coordination from "./coordination.ts";
 import * as AgentSearch from "./agentSearch.ts";
 import * as HistorySearch from "./historySearch.ts";
 import * as Skills from "./skillManagement.ts";
+import * as ExternalMcp from "./externalMcp.ts";
 import * as Memory from "./memory.ts";
 import * as Quality from "./qualityRecords.ts";
 import * as Scheduled from "./scheduledWork.ts";
@@ -363,6 +364,15 @@ export const WS_METHODS = {
   skillsRead: "skills.read",
   skillsLoad: "skills.load",
   skillsReload: "skills.reload",
+  externalMcpConfigure: "externalMcp.configure",
+  externalMcpList: "externalMcp.list",
+  externalMcpConnect: "externalMcp.connect",
+  externalMcpDisconnect: "externalMcp.disconnect",
+  externalMcpReload: "externalMcp.reload",
+  externalMcpRemove: "externalMcp.remove",
+  externalMcpSearch: "externalMcp.search",
+  externalMcpCall: "externalMcp.call",
+  externalMcpCancel: "externalMcp.cancel",
   agentDocumentsRead: "agentDocuments.read",
   agentDocumentsWrite: "agentDocuments.write",
   agentDocumentsAction: "agentDocuments.action",
@@ -1815,6 +1825,51 @@ export const ParityToolsRpcGroup = RpcGroup.make(
     payload: Skills.SkillListInput,
     success: Skills.SkillListResult,
     error: Schema.Union([Skills.SkillManagementError, EnvironmentAuthorizationError]),
+  }),
+  Rpc.make(WS_METHODS.externalMcpConfigure, {
+    payload: ExternalMcp.ExternalMcpConfigureInput,
+    success: ExternalMcp.ExternalMcpSnapshot,
+    error: Schema.Union([ExternalMcp.ExternalMcpError, EnvironmentAuthorizationError]),
+  }),
+  Rpc.make(WS_METHODS.externalMcpList, {
+    payload: Schema.Struct({}),
+    success: ExternalMcp.ExternalMcpListResult,
+    error: Schema.Union([ExternalMcp.ExternalMcpError, EnvironmentAuthorizationError]),
+  }),
+  Rpc.make(WS_METHODS.externalMcpConnect, {
+    payload: ExternalMcp.ExternalMcpIdInput,
+    success: ExternalMcp.ExternalMcpSnapshot,
+    error: Schema.Union([ExternalMcp.ExternalMcpError, EnvironmentAuthorizationError]),
+  }),
+  Rpc.make(WS_METHODS.externalMcpDisconnect, {
+    payload: ExternalMcp.ExternalMcpIdInput,
+    success: ExternalMcp.ExternalMcpSnapshot,
+    error: Schema.Union([ExternalMcp.ExternalMcpError, EnvironmentAuthorizationError]),
+  }),
+  Rpc.make(WS_METHODS.externalMcpReload, {
+    payload: ExternalMcp.ExternalMcpIdInput,
+    success: ExternalMcp.ExternalMcpSnapshot,
+    error: Schema.Union([ExternalMcp.ExternalMcpError, EnvironmentAuthorizationError]),
+  }),
+  Rpc.make(WS_METHODS.externalMcpRemove, {
+    payload: ExternalMcp.ExternalMcpIdInput,
+    success: Schema.Void,
+    error: Schema.Union([ExternalMcp.ExternalMcpError, EnvironmentAuthorizationError]),
+  }),
+  Rpc.make(WS_METHODS.externalMcpSearch, {
+    payload: ExternalMcp.ExternalMcpSearchInput,
+    success: ExternalMcp.ExternalMcpSearchResult,
+    error: Schema.Union([ExternalMcp.ExternalMcpError, EnvironmentAuthorizationError]),
+  }),
+  Rpc.make(WS_METHODS.externalMcpCall, {
+    payload: ExternalMcp.ExternalMcpCallInput,
+    success: ExternalMcp.ExternalMcpCallResult,
+    error: Schema.Union([ExternalMcp.ExternalMcpError, EnvironmentAuthorizationError]),
+  }),
+  Rpc.make(WS_METHODS.externalMcpCancel, {
+    payload: ExternalMcp.ExternalMcpCancelInput,
+    success: Schema.Void,
+    error: Schema.Union([ExternalMcp.ExternalMcpError, EnvironmentAuthorizationError]),
   }),
 );
 

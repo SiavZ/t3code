@@ -172,6 +172,7 @@ import * as AgentSessionScanner from "./project/AgentSessionScanner.ts";
 import * as WorkspaceAgentSearch from "./workspace/WorkspaceAgentSearch.ts";
 import * as HistorySearch from "./project/HistorySearch.ts";
 import * as SkillManagement from "./provider/SkillManagement.ts";
+import * as ExternalMcpConnections from "./mcp/ExternalMcpConnections.ts";
 import * as Memory from "./memory/Memory.ts";
 import * as QualityRecords from "./orchestration/QualityRecords.ts";
 import * as ScheduledWork from "./orchestration/ScheduledWork.ts";
@@ -527,6 +528,7 @@ const ProviderRuntimeLayerLive = ProviderSessionReaperLive.pipe(
         Layer.provide(ExternalHistoryReadersLayerLive),
       ),
       SkillManagement.layer,
+      ExternalMcpConnections.layer,
       Memory.layer,
       QualityRecords.layer,
       AgentDocuments.layer,

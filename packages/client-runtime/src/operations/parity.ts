@@ -82,4 +82,15 @@ export const parityOperations = {
     load: unary(WS_METHODS.skillsLoad),
     reload: unary(WS_METHODS.skillsReload),
   },
+  externalMcp: {
+    configure: unary(WS_METHODS.externalMcpConfigure),
+    list: unary(WS_METHODS.externalMcpList),
+    connect: unary(WS_METHODS.externalMcpConnect),
+    disconnect: unary(WS_METHODS.externalMcpDisconnect),
+    reload: unary(WS_METHODS.externalMcpReload),
+    remove: unary(WS_METHODS.externalMcpRemove),
+    search: unary(WS_METHODS.externalMcpSearch),
+    call: unary(WS_METHODS.externalMcpCall),
+    cancel: unary(WS_METHODS.externalMcpCancel),
+  },
 };

@@ -36,6 +36,8 @@ describe("RPC authorization scopes", () => {
       WS_METHODS.agentSearch,
       WS_METHODS.historySearch,
       WS_METHODS.skillsRead,
+      WS_METHODS.externalMcpList,
+      WS_METHODS.externalMcpSearch,
     ])
       expect(requiredScopeForRpcMethod(method)).toBe(AuthOrchestrationReadScope);
     for (const method of [
@@ -53,6 +55,7 @@ describe("RPC authorization scopes", () => {
       WS_METHODS.backgroundJobCancel,
       WS_METHODS.backgroundJobSubscribe,
       WS_METHODS.skillsLoad,
+      WS_METHODS.externalMcpCall,
     ])
       expect(requiredScopeForRpcMethod(method)).toBe(AuthOrchestrationOperateScope);
   });
@@ -62,6 +65,8 @@ describe("RPC authorization scopes", () => {
       WS_METHODS.unattendedGrantCreate,
       WS_METHODS.unattendedGrantRevoke,
       WS_METHODS.ambientConfigure,
+      WS_METHODS.externalMcpConfigure,
+      WS_METHODS.externalMcpRemove,
       WS_METHODS.memoryGlobalRead,
       WS_METHODS.memoryGlobalWrite,
     ])
