@@ -63,6 +63,10 @@ function unwrapEnsureSshEnvironmentResult(result: unknown) {
 }
 
 contextBridge.exposeInMainWorld("desktopBridge", {
+  consentNativeAutomation: (input) => ipcRenderer.invoke("desktop:automation:consent", input),
+  executeNativeAutomation: (input) => ipcRenderer.invoke("desktop:automation:execute", input),
+  revokeNativeAutomation: () => ipcRenderer.invoke("desktop:automation:revoke"),
+  nativeAutomationStatus: () => ipcRenderer.invoke("desktop:automation:status"),
   getAppBranding: () => {
     const result = ipcRenderer.sendSync(IpcChannels.GET_APP_BRANDING_CHANNEL);
     if (typeof result !== "object" || result === null) {

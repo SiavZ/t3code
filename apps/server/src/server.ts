@@ -12,6 +12,7 @@ import * as Duration from "effect/Duration";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Path from "effect/Path";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 import * as Random from "effect/Random";
 import * as Schedule from "effect/Schedule";
@@ -167,6 +168,7 @@ import * as AgentDocuments from "./orchestration/AgentDocuments.ts";
 import * as DocumentLifecycle from "./orchestration/DocumentLifecycle.ts";
 import * as AgentDocumentAssets from "./orchestration/AgentDocumentAssets.ts";
 import * as ThreadRuntimeService from "./orchestration/ThreadRuntimeService.ts";
+import * as IntegrationConfiguration from "./integrations/IntegrationConfiguration.ts";
 import * as SharedWorkspaceActivity from "./workspace/SharedWorkspaceActivity.ts";
 import * as ExternalHistoryReaders from "./project/ExternalHistoryReaders.ts";
 import * as AgentSessionScanner from "./project/AgentSessionScanner.ts";
@@ -574,6 +576,23 @@ const ProviderInstallationRefreshLive = Layer.effectDiscard(
   }),
 );
 
+const ConfiguredIntegrationsLayerLive = Layer.unwrap(
+  Effect.gen(function* () {
+    const settings = yield* (yield* ServerSettings.ServerSettingsService).getSettings;
+    const config = yield* ServerConfig.ServerConfig;
+    const path = yield* Path.Path;
+    return IntegrationConfiguration.configuredLayer(
+      settings.optionalIntegrations ?? {},
+      path.join(config.attachmentsDir, "integration-images"),
+    );
+  }),
+).pipe(
+  Layer.provide(PreviewAutomationBroker.layer),
+  Layer.provide(ServerSecretStore.layer),
+  Layer.provide(ServerSettingsLayerLive),
+  Layer.provide(OrchestrationLayerLive),
+);
+
 const RuntimeCoreDependenciesLive = ReactorLayerLive.pipe(
   Layer.provideMerge(ProviderInstallationRefreshLive),
   Layer.provideMerge(ReplayMarkers.layer),
@@ -589,6 +608,7 @@ const RuntimeCoreDependenciesLive = ReactorLayerLive.pipe(
   Layer.provideMerge(GitLayerLive),
   Layer.provideMerge(VcsLayerLive),
   Layer.provideMerge(ProviderRuntimeLayerLive),
+  Layer.provideMerge(ConfiguredIntegrationsLayerLive),
   Layer.provideMerge(Layer.mergeAll(TerminalLayerLive, PreviewLayerLive, DeviceLayerLive)),
   Layer.provideMerge(PersistenceLayerLive),
   // Both read a user-owned file out of the state directory and stream changes

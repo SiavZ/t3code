@@ -64,6 +64,7 @@ export type EnvironmentSubscriptionRpcTag =
   | typeof WS_METHODS.terminalAttach;
 
 export type EnvironmentStreamCommandRpcTag =
+  | typeof WS_METHODS.desktopConnect
   | typeof WS_METHODS.chatGptHandoffSubscribe
   | typeof WS_METHODS.cloudInstallRelayClient
   | typeof WS_METHODS.serverUpdateServerWithProgress
@@ -173,6 +174,34 @@ export function runStream<TTag extends EnvironmentStreamCommandRpcTag>(
   ).pipe(
     Stream.withSpan("EnvironmentRpc.runStream", {
       attributes: { "rpc.method": tag },
+    }),
+  );
+}
+
+/** Human-approved host registrations terminate when their authenticated session changes. */
+export function runSessionBoundStream<TTag extends EnvironmentStreamCommandRpcTag>(
+  tag: TTag,
+  input: EnvironmentRpcInput<TTag>,
+): Stream.Stream<
+  EnvironmentRpcStreamValue<TTag>,
+  EnvironmentRpcStreamFailure<TTag> | EnvironmentRpcUnavailableError,
+  EnvironmentSupervisor
+> {
+  return Stream.unwrap(
+    Effect.gen(function* () {
+      const supervisor = yield* EnvironmentSupervisor;
+      const session = yield* currentSession();
+      const replaced = SubscriptionRef.changes(supervisor.session).pipe(
+        Stream.filter((next) => Option.isNone(next) || next.value !== session),
+        Stream.runHead,
+        Effect.asVoid,
+      );
+      const method = session.client[tag] as (
+        input: EnvironmentRpcInput<TTag>,
+      ) => Stream.Stream<EnvironmentRpcStreamValue<TTag>, EnvironmentRpcStreamFailure<TTag>>;
+      return method(input).pipe(
+        Stream.interruptWhen(Effect.raceFirst(replaced, session.closed.pipe(Effect.ignore))),
+      );
     }),
   );
 }

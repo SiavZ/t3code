@@ -83,6 +83,13 @@ administrator-issued grant for the owning thread. Tool access alone is not that
 grant. Revoking a grant prevents further work under it; it cannot be replaced by
 an agent choosing a more permissive grant.
 
+External integrations stay unavailable until the environment has their explicit
+configuration and credentials. Sending mail, uploading source for a remote
+build, generating images, and deleting generated images require a fresh review
+of the exact request. Cancelling a local wait does not guarantee cancellation of
+an upstream paid request. Native Mac control additionally requires consent on
+the connected desktop host and stops when that host connection is lost.
+
 ## Storage cleanup
 
 Open **Settings → Storage** to enable automatic cleanup on one machine or all connected

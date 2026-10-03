@@ -23,7 +23,7 @@ describe("optional agent tool settings", () => {
     ]);
     expect(
       setOptionalAgentToolCapability(OPTIONAL_AGENT_TOOL_CAPABILITIES, "memory", true),
-    ).toHaveLength(8);
+    ).toHaveLength(9);
     expect(setOptionalAgentToolCapability([], "memory", false)).toEqual([]);
   });
   it("disabling any capability never broadens access", () => {
@@ -33,7 +33,7 @@ describe("optional agent tool settings", () => {
         capability,
         false,
       );
-      expect(narrowed).toHaveLength(7);
+      expect(narrowed).toHaveLength(8);
       expect(narrowed).not.toContain(capability);
       expect(narrowed.every((entry) => OPTIONAL_AGENT_TOOL_CAPABILITIES.includes(entry))).toBe(
         true,

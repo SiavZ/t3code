@@ -1,3 +1,4 @@
+import { installAutomationIpc } from "../automation/AutomationIpc.ts";
 import * as Effect from "effect/Effect";
 
 import { receiveProviderAuthCallback, cancelProviderAuthCallback } from "./methods/providerAuth.ts";
@@ -74,6 +75,7 @@ import { getWslState, setWslBackendEnabled, setWslDistro, setWslOnly } from "./m
 
 export const installDesktopIpcHandlers = Effect.fn("desktop.ipc.installHandlers")(function* () {
   const ipc = yield* DesktopIpc.DesktopIpc;
+  yield* installAutomationIpc;
   yield* installNotificationBadge();
   yield* PreviewIpc.installPreviewEventForwarding();
 

@@ -48,6 +48,8 @@ import { ExternalMcpToolkit } from "./toolkits/externalMcp/tools.ts";
 import { ExternalMcpToolkitHandlersLive } from "./toolkits/externalMcp/handlers.ts";
 import { RuntimeToolkit } from "./toolkits/runtime/tools.ts";
 import { RuntimeToolkitHandlersLive } from "./toolkits/runtime/handlers.ts";
+import { IntegrationsToolkit } from "./toolkits/integrations/tools.ts";
+import { IntegrationsToolkitHandlersLive } from "./toolkits/integrations/handlers.ts";
 import { AutomationToolkit } from "./toolkits/automation/tools.ts";
 import { AutomationToolkitHandlersLive } from "./toolkits/automation/handlers.ts";
 import {
@@ -700,6 +702,7 @@ export const layer = Layer.mergeAll(
   McpServer.toolkit(KnowledgeToolkit).pipe(Layer.provide(KnowledgeToolkitHandlersLive)),
   McpServer.toolkit(ExternalMcpToolkit).pipe(Layer.provide(ExternalMcpToolkitHandlersLive)),
   McpServer.toolkit(AutomationToolkit).pipe(Layer.provide(AutomationToolkitHandlersLive)),
+  McpServer.toolkit(IntegrationsToolkit).pipe(Layer.provide(IntegrationsToolkitHandlersLive)),
   McpServer.toolkit(RuntimeToolkit).pipe(Layer.provide(RuntimeToolkitHandlersLive)),
   DeviceToolkitRegistrationLive,
 ).pipe(Layer.provideMerge(McpTransportLive));

@@ -15,6 +15,7 @@ import { createModelSelection } from "@t3tools/shared/model";
 import { resolveProjectSettings } from "@t3tools/shared/projectSettings";
 import { useNavigate } from "@tanstack/react-router";
 
+import { NativeAutomationSettings } from "./NativeAutomationSettings";
 import { getCustomModelOptionsByInstance } from "../../modelSelection";
 import {
   applyProviderInstanceSettings,
@@ -474,6 +475,7 @@ export function ProjectDefaultsSettings({ category }: { category: ProjectSetting
         </>
       ) : (
         <>
+          <NativeAutomationSettings />
           <p className="text-sm text-muted-foreground">{OPTIONAL_AGENT_TOOLS_NOTICE}</p>
           {OPTIONAL_AGENT_TOOL_CAPABILITIES.map((capability) => {
             const value = optionalAgentToolCapabilityValue(

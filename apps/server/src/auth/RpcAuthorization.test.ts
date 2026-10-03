@@ -70,8 +70,18 @@ describe("RPC authorization scopes", () => {
       WS_METHODS.ambientConfigure,
       WS_METHODS.externalMcpConfigure,
       WS_METHODS.externalMcpRemove,
+      WS_METHODS.integrationApprovalGrant,
+      WS_METHODS.gmailBeginConnect,
+      WS_METHODS.gmailCompleteConnect,
+      WS_METHODS.gmailDisconnect,
+      WS_METHODS.desktopConnect,
       WS_METHODS.memoryGlobalRead,
       WS_METHODS.memoryGlobalWrite,
+      WS_METHODS.desktopAuthorize,
+      WS_METHODS.desktopRespond,
+      WS_METHODS.desktopDisconnect,
+      WS_METHODS.desktopLease,
+      WS_METHODS.desktopRevoke,
     ])
       expect(requiredScopeForRpcMethod(method)).toBe(AuthAccessWriteScope);
   });

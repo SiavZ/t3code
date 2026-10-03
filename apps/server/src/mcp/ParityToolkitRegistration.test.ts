@@ -28,6 +28,7 @@ import { QualityRecordsToolkit } from "./toolkits/qualityRecords/tools.ts";
 import { KnowledgeToolkit } from "./toolkits/knowledge/tools.ts";
 import { ExternalMcpToolkit } from "./toolkits/externalMcp/tools.ts";
 import { RuntimeToolkit } from "./toolkits/runtime/tools.ts";
+import { IntegrationsToolkit } from "./toolkits/integrations/tools.ts";
 
 const decodeToolJsonSchema = Schema.decodeUnknownEffect(McpSchema.ToolJsonSchema);
 const owner = ThreadId.make("document-owner");
@@ -237,6 +238,36 @@ const registrationHandlers = Layer.mergeAll(
     runtime_fork: uncalled,
     runtime_handoff: uncalled,
   }),
+  IntegrationsToolkit.toLayer({
+    integrations_catalog_status: uncalled,
+    integrations_catalog_search: uncalled,
+    integrations_catalog_details: uncalled,
+    integrations_catalog_select: uncalled,
+    integrations_catalog_select_off_catalog: uncalled,
+    integrations_catalog_selections: uncalled,
+    integrations_catalog_clear_selection: uncalled,
+    integrations_catalog_suggest: uncalled,
+    integrations_gmail_status: uncalled,
+    integrations_gmail_search: uncalled,
+    integrations_gmail_read: uncalled,
+    integrations_gmail_attachment: uncalled,
+    integrations_gmail_labels: uncalled,
+    integrations_gmail_threads: uncalled,
+    integrations_gmail_mutate: uncalled,
+    integrations_build_status: uncalled,
+    integrations_build_prepare: uncalled,
+    integrations_build_discard: uncalled,
+    integrations_build_submit: uncalled,
+    integrations_image_status: uncalled,
+    integrations_image_create: uncalled,
+    integrations_image_delete_asset: uncalled,
+    integrations_browser_run: uncalled,
+    integrations_browser_get: uncalled,
+    integrations_browser_cancel: uncalled,
+    integrations_desktop_hosts: uncalled,
+    integrations_desktop_lease: uncalled,
+    integrations_desktop_invoke: uncalled,
+  }),
 );
 it.effect("all added toolkits register through the MCP server", () =>
   Effect.scoped(
@@ -249,8 +280,9 @@ it.effect("all added toolkits register through the MCP server", () =>
       yield* McpServer.registerToolkit(KnowledgeToolkit);
       yield* McpServer.registerToolkit(ExternalMcpToolkit);
       yield* McpServer.registerToolkit(RuntimeToolkit);
+      yield* McpServer.registerToolkit(IntegrationsToolkit);
       const server = yield* McpServer.McpServer;
-      expect(server.tools.length).toBe(53);
+      expect(server.tools.length).toBe(81);
       for (const { tool } of server.tools) expect(tool.inputSchema.type, tool.name).toBe("object");
     }).pipe(Effect.provide(registrationHandlers), Effect.provide(registered)),
   ),
@@ -268,6 +300,7 @@ it.effect("all added toolkits expose MCP-compatible object parameter schemas", (
       KnowledgeToolkit,
       ExternalMcpToolkit,
       RuntimeToolkit,
+      IntegrationsToolkit,
     ]) {
       for (const tool of Object.values(toolkit.tools)) {
         const encoded = Tool.getJsonSchema(tool);

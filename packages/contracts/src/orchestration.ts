@@ -148,6 +148,7 @@ export const OPTIONAL_AGENT_TOOL_CAPABILITIES = [
   "knowledge",
   "external-mcp",
   "runtime-tools",
+  "integrations",
 ] as const;
 export const OptionalAgentToolCapability = Schema.Literals(OPTIONAL_AGENT_TOOL_CAPABILITIES);
 export type OptionalAgentToolCapability = typeof OptionalAgentToolCapability.Type;

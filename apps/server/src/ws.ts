@@ -113,7 +113,14 @@ import * as AgentDocuments from "./orchestration/AgentDocuments.ts";
 import * as AgentDocumentAssets from "./orchestration/AgentDocumentAssets.ts";
 import * as AmbientWork from "./orchestration/AmbientWork.ts";
 import * as ThreadRuntimeService from "./orchestration/ThreadRuntimeService.ts";
+import * as DesktopAutomationBroker from "./integrations/DesktopAutomationBroker.ts";
+import * as BrowserTaskService from "./integrations/BrowserTaskService.ts";
+import * as WorkflowApprovals from "./integrations/WorkflowApprovals.ts";
+import * as IntegrationCatalog from "./integrations/IntegrationCatalog.ts";
+import * as GmailService from "./integrations/GmailService.ts";
 import * as GlobalMemory from "./memory/GlobalMemory.ts";
+import * as RemoteBuildService from "./integrations/RemoteBuildService.ts";
+import * as ImageGenerationService from "./integrations/ImageGenerationService.ts";
 import * as Memory from "./memory/Memory.ts";
 import * as QualityRecords from "./orchestration/QualityRecords.ts";
 import * as ScheduledWork from "./orchestration/ScheduledWork.ts";
@@ -527,11 +534,73 @@ const makeIntegrationWorkflowRpcLayer = (currentSession: EnvironmentAuth.Authent
     Effect.gen(function* () {
       const currentSessionId = currentSession.sessionId;
       const globalMemory = yield* GlobalMemory.GlobalMemory;
+      const workflowApprovals = yield* WorkflowApprovals.WorkflowApprovals;
+      const integrationCatalog = yield* IntegrationCatalog.IntegrationCatalog;
+      const gmail = yield* GmailService.GmailService;
+      const remoteBuild = yield* RemoteBuildService.RemoteBuildService;
+      const images = yield* ImageGenerationService.ImageGenerationService;
+      const desktop = yield* DesktopAutomationBroker.DesktopAutomationBroker;
+      const browser = yield* BrowserTaskService.BrowserTaskService;
+      const environmentId = yield* (yield* ServerEnvironment.ServerEnvironment).getEnvironmentId;
+      const browserAuthority = { environmentId, humanSessionId: currentSessionId };
       return {
         [WS_METHODS.memoryGlobalRead]: (input) =>
           globalMemory.read(input, { humanSessionId: currentSessionId, admin: true }),
         [WS_METHODS.memoryGlobalWrite]: (input) =>
           globalMemory.write(input, { humanSessionId: currentSessionId, admin: true }),
+        [WS_METHODS.desktopConnect]: (input) =>
+          Stream.unwrap(desktop.connectForClient(input, currentSessionId, environmentId)),
+        [WS_METHODS.desktopAuthorize]: (input) =>
+          desktop.authorizeForClient(input, currentSessionId),
+        [WS_METHODS.desktopRespond]: (input) => desktop.respondForClient(input, currentSessionId),
+        [WS_METHODS.desktopDisconnect]: (input) =>
+          desktop.disconnectForClient(input.hostId, input.generation, currentSessionId),
+        [WS_METHODS.desktopHosts]: () => desktop.hosts(environmentId),
+        [WS_METHODS.desktopLease]: (input) => desktop.lease({ ...input, environmentId }),
+        [WS_METHODS.desktopRevoke]: (input) => desktop.revoke(input.leaseId),
+        [WS_METHODS.desktopInvoke]: (input) =>
+          desktop.invoke({ environmentId, threadId: input.threadId }, input.leaseId, input.action),
+        [WS_METHODS.browserRun]: (input) => browser.runForClient(input, browserAuthority),
+        [WS_METHODS.browserGet]: (input) => browser.getForClient(input, browserAuthority),
+        [WS_METHODS.browserCancel]: (input) => browser.cancelForClient(input, browserAuthority),
+        [WS_METHODS.integrationApprovalGrant]: (input) =>
+          workflowApprovals
+            .grant({ ...input, humanSessionId: currentSessionId })
+            .pipe(Effect.map((approvalId) => ({ approvalId }))),
+        [WS_METHODS.catalogStatus]: () => integrationCatalog.status(),
+        [WS_METHODS.catalogSearch]: (input) => integrationCatalog.search(input),
+        [WS_METHODS.catalogDetails]: (input) =>
+          integrationCatalog.details(input.requestId, input.productId),
+        [WS_METHODS.catalogSelect]: (input) =>
+          integrationCatalog.select(input.requestId, input.productId, input.reason),
+        [WS_METHODS.catalogSelectOffCatalog]: (input) =>
+          integrationCatalog.selectOffCatalog(input.productId, input.publicUrl, input.reason),
+        [WS_METHODS.catalogSelections]: () => integrationCatalog.selections(),
+        [WS_METHODS.catalogClearSelection]: (input) =>
+          integrationCatalog.clearSelection(input.selectionId),
+        [WS_METHODS.catalogSuggest]: (input) =>
+          integrationCatalog.suggest(input.payload, input.approvalId, input.idempotencyKey),
+        [WS_METHODS.gmailStatus]: () => gmail.status(),
+        [WS_METHODS.gmailBeginConnect]: (input) =>
+          gmail.beginConnect(currentSessionId, input.approvalId),
+        [WS_METHODS.gmailCompleteConnect]: (input) =>
+          gmail.completeConnect(currentSessionId, input.state, input.code),
+        [WS_METHODS.gmailDisconnect]: () => gmail.disconnect(),
+        [WS_METHODS.gmailSearch]: (input) => gmail.search(input.query, input.pageToken),
+        [WS_METHODS.gmailRead]: (input) => gmail.read(input.messageId),
+        [WS_METHODS.gmailAttachment]: (input) =>
+          gmail.attachment(input.messageId, input.attachmentId),
+        [WS_METHODS.gmailLabels]: () => gmail.labels(),
+        [WS_METHODS.gmailThreads]: (input) => gmail.threads(input.query),
+        [WS_METHODS.gmailReviewMutation]: (input) => gmail.reviewMutation(input),
+        [WS_METHODS.gmailMutate]: (input) => gmail.mutate(input),
+        [WS_METHODS.remoteBuildStatus]: () => remoteBuild.status(),
+        [WS_METHODS.remoteBuildPrepare]: (input) => remoteBuild.prepareForThread(input.threadId),
+        [WS_METHODS.remoteBuildDiscard]: (input) => remoteBuild.discard(input.snapshotId),
+        [WS_METHODS.remoteBuildSubmit]: (input) => remoteBuild.submit(input),
+        [WS_METHODS.imagesStatus]: () => images.status(),
+        [WS_METHODS.imagesCreate]: (input) => images.create(input),
+        [WS_METHODS.imagesDelete]: (input) => images.deleteAsset(input),
       };
     }),
   );
@@ -4288,7 +4357,14 @@ export const websocketRpcRouteLayer = Layer.unwrap(
     const documentAssets = yield* AgentDocumentAssets.AgentDocumentAssets;
     const ambientWork = yield* AmbientWork.AmbientWork;
     const threadRuntime = yield* ThreadRuntimeService.ThreadRuntimeService;
+    const workflowApprovals = yield* WorkflowApprovals.WorkflowApprovals;
+    const integrationCatalog = yield* IntegrationCatalog.IntegrationCatalog;
+    const gmail = yield* GmailService.GmailService;
     const globalMemory = yield* GlobalMemory.GlobalMemory;
+    const remoteBuild = yield* RemoteBuildService.RemoteBuildService;
+    const images = yield* ImageGenerationService.ImageGenerationService;
+    const desktop = yield* DesktopAutomationBroker.DesktopAutomationBroker;
+    const browser = yield* BrowserTaskService.BrowserTaskService;
     const memory = yield* Memory.MemoryService;
     const qualityRecords = yield* QualityRecords.QualityRecords;
     const scheduledWork = yield* ScheduledWork.ScheduledWork;
@@ -4359,7 +4435,18 @@ export const websocketRpcRouteLayer = Layer.unwrap(
                 Layer.provide(Layer.succeed(BackgroundJobs.BackgroundJobs, backgroundJobs)),
               )
               .pipe(
-                Layer.provide(Layer.succeed(GlobalMemory.GlobalMemory, globalMemory)),
+                Layer.provide(
+                  Layer.mergeAll(
+                    Layer.succeed(WorkflowApprovals.WorkflowApprovals, workflowApprovals),
+                    Layer.succeed(IntegrationCatalog.IntegrationCatalog, integrationCatalog),
+                    Layer.succeed(GmailService.GmailService, gmail),
+                    Layer.succeed(GlobalMemory.GlobalMemory, globalMemory),
+                    Layer.succeed(RemoteBuildService.RemoteBuildService, remoteBuild),
+                    Layer.succeed(ImageGenerationService.ImageGenerationService, images),
+                    Layer.succeed(DesktopAutomationBroker.DesktopAutomationBroker, desktop),
+                    Layer.succeed(BrowserTaskService.BrowserTaskService, browser),
+                  ),
+                ),
                 Layer.provide(
                   Layer.succeed(CoordinationPlans.CoordinationPlans, coordinationPlans),
                 ),

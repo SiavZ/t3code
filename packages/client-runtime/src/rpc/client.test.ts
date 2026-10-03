@@ -93,6 +93,57 @@ const makeHarness = Effect.fn("TestEnvironmentRpc.makeHarness")(function* () {
 });
 
 describe("environment RPC", () => {
+  it.effect.each(["disconnect", "replacement"] as const)(
+    "ends native host registration on session %s without carrying consent forward",
+    (change) =>
+      Effect.gen(function* () {
+        const registered = yield* Deferred.make<void>();
+        const released = yield* Deferred.make<void>();
+        let registrations = 0;
+        let replacementRegistrations = 0;
+        const firstClient = {
+          [WS_METHODS.desktopConnect]: () =>
+            Stream.suspend(() => {
+              registrations += 1;
+              return Stream.unwrap(
+                Deferred.succeed(registered, undefined).pipe(Effect.as(Stream.never)),
+              ).pipe(Stream.ensuring(Deferred.succeed(released, undefined)));
+            }),
+        } as unknown as WsRpcProtocolClient;
+        const replacementClient = {
+          [WS_METHODS.desktopConnect]: () =>
+            Stream.suspend(() => {
+              replacementRegistrations += 1;
+              return Stream.never;
+            }),
+        } as unknown as WsRpcProtocolClient;
+        const { activeSession, supervisor } = yield* makeHarness();
+        yield* SubscriptionRef.set(activeSession, Option.some(session(firstClient)));
+        const consumer = yield* parityOperations.desktopAutomation
+          .connectOnce({
+            environmentId: TARGET.environmentId,
+            hostId: "native-host",
+            displayName: "Native host",
+            generation: "human-consent-once",
+            operations: ["observe"],
+          })
+          .pipe(
+            Stream.runDrain,
+            Effect.provideService(EnvironmentSupervisor.EnvironmentSupervisor, supervisor),
+            Effect.forkChild,
+          );
+        yield* Deferred.await(registered);
+        yield* SubscriptionRef.set(
+          activeSession,
+          change === "disconnect" ? Option.none() : Option.some(session(replacementClient)),
+        );
+        yield* Fiber.join(consumer);
+        yield* Deferred.await(released);
+        expect(registrations).toBe(1);
+        expect(replacementRegistrations).toBe(0);
+      }),
+  );
+
   it.effect("refreshes quality revision metadata from the replacement environment session", () =>
     Effect.gen(function* () {
       const firstSeen = yield* Deferred.make<void>();

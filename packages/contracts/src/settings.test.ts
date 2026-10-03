@@ -25,6 +25,7 @@ describe("optional agent tools", () => {
     const settings = decodeServerSettings({});
     expect(settings.agentToolCapabilities).toEqual([]);
     expect(settings.enableMemoryAutoRecall).toBe(false);
+    expect(settings.optionalIntegrations).toEqual({});
     expect(settings.externalHistoryStores).toEqual([]);
     expect(settings.enableGlobalMemory).toBe(false);
   });

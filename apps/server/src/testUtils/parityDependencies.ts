@@ -23,6 +23,8 @@ import * as DocumentLifecycle from "../orchestration/DocumentLifecycle.ts";
 import * as AgentDocumentAssets from "../orchestration/AgentDocumentAssets.ts";
 import * as ThreadRuntimeService from "../orchestration/ThreadRuntimeService.ts";
 import * as ProcessRunner from "../processRunner.ts";
+import * as IntegrationConfiguration from "../integrations/IntegrationConfiguration.ts";
+import * as PreviewAutomationBroker from "../mcp/PreviewAutomationBroker.ts";
 import { OrchestrationCommandReceiptRepositoryLive } from "../persistence/Layers/OrchestrationCommandReceipts.ts";
 
 // Supply the caller's isolated persistence, engine, query, settings and provider registry
@@ -56,6 +58,9 @@ export const parityDependenciesLayer = parityStartupDependenciesLayer.pipe(
       Memory.layer,
       QualityRecords.layer,
       AgentDocumentAssets.layer,
+      IntegrationConfiguration.configuredLayer({}, "unused-test-integration-assets").pipe(
+        Layer.provide(PreviewAutomationBroker.layer),
+      ),
     ),
   ),
   Layer.provide(WorkspacePaths.layer),

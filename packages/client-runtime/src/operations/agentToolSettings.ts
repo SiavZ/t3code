@@ -38,6 +38,10 @@ export const OPTIONAL_AGENT_TOOL_DETAILS: Record<
     label: "Runtime tools",
     description: "Inspect and manage agent runtime operations.",
   },
+  integrations: {
+    label: "Integrations",
+    description: "Use configured browser, email, image and remote build services.",
+  },
 };
 
 /** Change one flag using each target's effective value, never a representative's array. */
