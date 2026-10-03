@@ -3,6 +3,7 @@ import {
   type ProjectScopedServerSettingKey,
   type ServerSettings,
   type UnifiedSettings,
+  type OptionalAgentToolCapability,
 } from "@t3tools/contracts";
 import { useCallback, useMemo } from "react";
 
@@ -20,6 +21,7 @@ import {
   planProjectOverridesClear,
   planScopedSettingsClear,
   planScopedSettingsPatch,
+  planScopedAgentToolCapability,
   scopedSettingsAreMixed,
   scopedSettingsSource,
   type ProjectOverrideEntry,
@@ -86,6 +88,16 @@ export function useUpdateScopedSettings() {
   const run = useRunScopedPlan();
   return useCallback(
     (patch: ScopedSettingsPatch) => run(planScopedSettingsPatch(scope, environments, patch)),
+    [environments, run, scope],
+  );
+}
+
+export function useUpdateScopedAgentToolCapability() {
+  const { scope, environments } = useSettingsScope();
+  const run = useRunScopedPlan();
+  return useCallback(
+    (capability: OptionalAgentToolCapability, enabled: boolean) =>
+      run(planScopedAgentToolCapability(scope, environments, capability, enabled)),
     [environments, run, scope],
   );
 }

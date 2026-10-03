@@ -34,6 +34,24 @@ import { PullRequestsToolkitHandlersLive } from "./toolkits/pullRequests/handler
 import { PullRequestsToolkit } from "./toolkits/pullRequests/tools.ts";
 import { WorkersToolkitHandlersLive } from "./toolkits/workers/handlers.ts";
 import { WorkersToolkit } from "./toolkits/workers/tools.ts";
+import { CoordinationToolkit } from "./toolkits/coordination/tools.ts";
+import { CoordinationToolkitHandlersLive } from "./toolkits/coordination/handlers.ts";
+import { MemoryToolkit } from "./toolkits/memory/tools.ts";
+import { MemoryToolkitHandlersLive } from "./toolkits/memory/handlers.ts";
+import { QualityRecordsToolkit } from "./toolkits/qualityRecords/tools.ts";
+import { QualityRecordsToolkitHandlersLive } from "./toolkits/qualityRecords/handlers.ts";
+import { AgentDocumentsToolkit } from "./toolkits/agentDocuments/tools.ts";
+import { AgentDocumentsToolkitHandlersLive } from "./toolkits/agentDocuments/handlers.ts";
+import { KnowledgeToolkit } from "./toolkits/knowledge/tools.ts";
+import { KnowledgeToolkitHandlersLive } from "./toolkits/knowledge/handlers.ts";
+import { ExternalMcpToolkit } from "./toolkits/externalMcp/tools.ts";
+import { ExternalMcpToolkitHandlersLive } from "./toolkits/externalMcp/handlers.ts";
+import { RuntimeToolkit } from "./toolkits/runtime/tools.ts";
+import { RuntimeToolkitHandlersLive } from "./toolkits/runtime/handlers.ts";
+import { IntegrationsToolkit } from "./toolkits/integrations/tools.ts";
+import { IntegrationsToolkitHandlersLive } from "./toolkits/integrations/handlers.ts";
+import { AutomationToolkit } from "./toolkits/automation/tools.ts";
+import { AutomationToolkitHandlersLive } from "./toolkits/automation/handlers.ts";
 import {
   DeviceScreenshotToolkitHandlersLive,
   DeviceStandardToolkitHandlersLive,
@@ -677,5 +695,14 @@ export const layer = Layer.mergeAll(
   PreviewToolkitRegistrationLive,
   PullRequestsToolkitRegistrationLive,
   WorkersToolkitRegistrationLive,
+  McpServer.toolkit(CoordinationToolkit).pipe(Layer.provide(CoordinationToolkitHandlersLive)),
+  McpServer.toolkit(MemoryToolkit).pipe(Layer.provide(MemoryToolkitHandlersLive)),
+  McpServer.toolkit(QualityRecordsToolkit).pipe(Layer.provide(QualityRecordsToolkitHandlersLive)),
+  McpServer.toolkit(AgentDocumentsToolkit).pipe(Layer.provide(AgentDocumentsToolkitHandlersLive)),
+  McpServer.toolkit(KnowledgeToolkit).pipe(Layer.provide(KnowledgeToolkitHandlersLive)),
+  McpServer.toolkit(ExternalMcpToolkit).pipe(Layer.provide(ExternalMcpToolkitHandlersLive)),
+  McpServer.toolkit(AutomationToolkit).pipe(Layer.provide(AutomationToolkitHandlersLive)),
+  McpServer.toolkit(IntegrationsToolkit).pipe(Layer.provide(IntegrationsToolkitHandlersLive)),
+  McpServer.toolkit(RuntimeToolkit).pipe(Layer.provide(RuntimeToolkitHandlersLive)),
   DeviceToolkitRegistrationLive,
 ).pipe(Layer.provideMerge(McpTransportLive));

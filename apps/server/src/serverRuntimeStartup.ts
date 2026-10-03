@@ -33,6 +33,13 @@ import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
 
 import * as ServerConfig from "./config.ts";
+import * as ThreadRuntimeService from "./orchestration/ThreadRuntimeService.ts";
+import * as AgentDocuments from "./orchestration/AgentDocuments.ts";
+import * as CoordinationReactor from "./orchestration/CoordinationReactor.ts";
+import * as ScheduledWork from "./orchestration/ScheduledWork.ts";
+import * as AmbientWork from "./orchestration/AmbientWork.ts";
+import * as BackgroundJobs from "./background/BackgroundJobs.ts";
+import * as RuntimeHookObservers from "./provider/RuntimeHookObservers.ts";
 import { flushCompileCache } from "./compileCache.ts";
 import * as Keybindings from "./keybindings.ts";
 import * as ExternalLauncher from "./process/externalLauncher.ts";
@@ -959,6 +966,13 @@ export const make = (options?: StartupOptions) =>
     const serverEnvironment = yield* ServerEnvironment.ServerEnvironment;
     const projectionSnapshotQuery = yield* ProjectionSnapshotQuery.ProjectionSnapshotQuery;
     const providerSessionDirectory = yield* ProviderSessionDirectory.ProviderSessionDirectory;
+    const runtimeHookObservers = yield* RuntimeHookObservers.RuntimeHookObservers;
+    const coordinationReactor = yield* CoordinationReactor.CoordinationReactor;
+    const agentDocuments = yield* AgentDocuments.AgentDocuments;
+    const threadRuntime = yield* ThreadRuntimeService.ThreadRuntimeService;
+    const scheduledWork = yield* ScheduledWork.ScheduledWork;
+    const ambientWork = yield* AmbientWork.AmbientWork;
+    const backgroundJobs = yield* BackgroundJobs.BackgroundJobs;
     const crypto = yield* Crypto.Crypto;
     const launcher = yield* ServiceLauncherClient.ServiceLauncherClient;
 
@@ -1010,6 +1024,8 @@ export const make = (options?: StartupOptions) =>
         ),
       );
 
+      yield* runStartupPhase("thread-runtime.recover", threadRuntime.recoverPending());
+
       yield* Effect.logDebug("startup phase: parking orchestration roots at activation");
       yield* runStartupPhase(
         "reactors.start",
@@ -1021,6 +1037,22 @@ export const make = (options?: StartupOptions) =>
 
       yield* runStartupPhase("workers.pending-starts.reconcile", reconcileWorkerPendingStarts);
       yield* runStartupPhase("provider-sessions.reconcile", reconcileProviderSessions);
+      yield* runStartupPhase("coordination.recover", coordinationReactor.recover);
+      yield* runStartupPhase("agent-documents.recover", agentDocuments.recover);
+      yield* runStartupPhase("background-jobs.reconcile", backgroundJobs.reconcile);
+      yield* runStartupPhase(
+        "scheduled-work.start",
+        scheduledWork.start.pipe(Scope.provide(reactorScope)),
+      );
+      yield* runStartupPhase(
+        "ambient-work.start",
+        ambientWork.start.pipe(Scope.provide(reactorScope)),
+      );
+      yield* runStartupPhase(
+        "coordination.start",
+        coordinationReactor.start.pipe(Scope.provide(reactorScope)),
+      );
+      yield* runStartupPhase("runtime-hooks.start", runtimeHookObservers.start());
       yield* runStartupPhase("worktree-setups.reconcile", reconcileWorktreeSetups);
 
       yield* Effect.logDebug("startup phase: syncing clean projects");

@@ -33,6 +33,7 @@ const ProviderSessionStatus = Schema.Literals([
 ]);
 
 export const ProviderSession = Schema.Struct({
+  runtimeEpochId: Schema.optional(Schema.String),
   provider: ProviderDriverKind,
   // Optional during the driver/instance migration. Once every producer
   // populates it (post-slice-4), routing flips to instance-id-only and the
@@ -52,6 +53,7 @@ export const ProviderSession = Schema.Struct({
 export type ProviderSession = typeof ProviderSession.Type;
 
 export const ProviderSessionStartInput = Schema.Struct({
+  runtimeEpochId: Schema.optional(Schema.String),
   threadId: ThreadId,
   provider: Schema.optional(ProviderDriverKind),
   // See ProviderSession for the migration story.
@@ -143,6 +145,7 @@ export class ProviderUploadFeedbackError extends Schema.TaggedError<ProviderUplo
 const ProviderEventKind = Schema.Literals(["session", "notification", "request", "error"]);
 
 export const ProviderEvent = Schema.Struct({
+  runtimeEpochId: Schema.optional(Schema.String),
   id: EventId,
   kind: ProviderEventKind,
   provider: ProviderDriverKind,

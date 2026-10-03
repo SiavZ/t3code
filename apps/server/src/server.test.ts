@@ -153,6 +153,7 @@ import {
   ProviderVersionCache,
 } from "./provider/providerMaintenance.ts";
 import * as ServerLifecycleEvents from "./serverLifecycleEvents.ts";
+import { parityDependenciesLayer } from "./testUtils/parityDependencies.ts";
 import * as ServerRuntimeStartup from "./serverRuntimeStartup.ts";
 import * as ServiceLauncherClient from "./cloud/serviceLauncherClient.ts";
 import * as ServerSettings from "./serverSettings.ts";
@@ -774,6 +775,7 @@ const buildAppUnderTest = (options?: {
       // Viewed-file marks for a host that keeps none of its own are rows, so the routes want a
       // database. Its own, in memory: nothing here shares a table with the auth store.
       makeRoutesLayer.pipe(
+        Layer.provideMerge(parityDependenciesLayer),
         Layer.provide(Layer.mergeAll(serviceLauncherClientLayer, SqlitePersistenceMemory)),
       ),
       {
@@ -1010,6 +1012,7 @@ const buildAppUnderTest = (options?: {
                 hasCreateEvent: false,
               }),
             dispatch: () => Effect.succeed({ sequence: 0 }),
+            subscribeDomainEvents: Effect.succeed(Stream.empty),
             streamDomainEvents: Stream.empty,
             latestSequence: Effect.succeed(0),
             ...options?.layers?.orchestrationEngine,

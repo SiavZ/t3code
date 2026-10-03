@@ -1,5 +1,7 @@
 // @effect-diagnostics nodeBuiltinImport:off
 import * as NodeHttp from "node:http";
+import * as GlobalMemory from "./memory/GlobalMemory.ts";
+import * as WorkflowApprovals from "./integrations/WorkflowApprovals.ts";
 
 import * as NodeHttpServer from "@effect/platform-node/NodeHttpServer";
 import * as NodeServices from "@effect/platform-node/NodeServices";
@@ -11,6 +13,8 @@ import * as Duration from "effect/Duration";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Path from "effect/Path";
+import * as SqlClient from "effect/unstable/sql/SqlClient";
 import * as Random from "effect/Random";
 import * as Schedule from "effect/Schedule";
 import * as Semaphore from "effect/Semaphore";
@@ -161,6 +165,31 @@ import * as UsageLimitSources from "./usage/UsageLimitSources.ts";
 import * as UsageService from "./usage/UsageService.ts";
 import { OrchestrationLayerLive } from "./orchestration/runtimeLayer.ts";
 import * as OwnedWorkers from "./orchestration/OwnedWorkers.ts";
+import * as AgentDocuments from "./orchestration/AgentDocuments.ts";
+import * as DocumentLifecycle from "./orchestration/DocumentLifecycle.ts";
+import * as AgentDocumentAssets from "./orchestration/AgentDocumentAssets.ts";
+import * as ThreadRuntimeService from "./orchestration/ThreadRuntimeService.ts";
+import * as RuntimeHooks from "./provider/RuntimeHooks.ts";
+import * as IntegrationConfiguration from "./integrations/IntegrationConfiguration.ts";
+import * as SelfDevelopmentService from "./orchestration/SelfDevelopmentService.ts";
+import * as RuntimeHookObservers from "./provider/RuntimeHookObservers.ts";
+import * as SharedWorkspaceActivity from "./workspace/SharedWorkspaceActivity.ts";
+import * as ProviderDiagnosticRunner from "./provider/ProviderDiagnosticRunner.ts";
+import * as ProviderDoctor from "./provider/ProviderDoctor.ts";
+import * as ExternalHistoryReaders from "./project/ExternalHistoryReaders.ts";
+import * as AgentSessionScanner from "./project/AgentSessionScanner.ts";
+import * as WorkspaceAgentSearch from "./workspace/WorkspaceAgentSearch.ts";
+import * as HistorySearch from "./project/HistorySearch.ts";
+import * as SkillManagement from "./provider/SkillManagement.ts";
+import * as ExternalMcpConnections from "./mcp/ExternalMcpConnections.ts";
+import * as Memory from "./memory/Memory.ts";
+import * as QualityRecords from "./orchestration/QualityRecords.ts";
+import * as ScheduledWork from "./orchestration/ScheduledWork.ts";
+import * as ScheduledWorkActivation from "./orchestration/ScheduledWorkActivation.ts";
+import * as AmbientWork from "./orchestration/AmbientWork.ts";
+import * as UnattendedGrants from "./orchestration/UnattendedGrants.ts";
+import * as BackgroundJobs from "./background/BackgroundJobs.ts";
+import * as BackgroundJobAuthority from "./background/BackgroundJobAuthority.ts";
 import * as ProjectionSnapshotQuery from "./orchestration/Services/ProjectionSnapshotQuery.ts";
 import {
   clearPersistedServerRuntimeState,
@@ -466,11 +495,67 @@ const CloudManagedEndpointRuntimeLive = Layer.mergeAll(
   ),
 );
 
+const ExternalHistoryReadersLayerLive = ExternalHistoryReaders.layer.pipe(
+  Layer.provide(
+    Layer.effect(
+      ExternalHistoryReaders.ExternalHistoryStores,
+      Effect.gen(function* () {
+        const settings = yield* ServerSettings.ServerSettingsService;
+        return {
+          get: settings.getSettings.pipe(
+            Effect.map((value) => value.externalHistoryStores ?? []),
+            Effect.catch((cause) =>
+              Effect.logWarning("External history stores unavailable", { cause }).pipe(
+                Effect.as([]),
+              ),
+            ),
+          ),
+        };
+      }),
+    ),
+  ),
+  Layer.provide(ServerSettingsLayerLive),
+);
+
 const ProviderRuntimeLayerLive = ProviderSessionReaperLive.pipe(
+  Layer.provideMerge(GlobalMemory.layer),
   // Subscribes to `account.rate-limits.updated` so usage bars track live
   // telemetry instead of waiting for the next status probe.
   Layer.provideMerge(ProviderUsageLimitsIngestionLive),
-  Layer.provideMerge(ProviderLayerLive),
+  Layer.provideMerge(RuntimeHookObservers.layer),
+  Layer.provideMerge(DocumentLifecycle.layer),
+  Layer.provideMerge(AmbientWork.layer),
+  Layer.provideMerge(BackgroundJobs.layer.pipe(Layer.provide(BackgroundJobAuthority.layer))),
+  Layer.provideMerge(ScheduledWork.layer),
+  Layer.provideMerge(ScheduledWorkActivation.layer),
+  Layer.provideMerge(UnattendedGrants.layer),
+  Layer.provideMerge(OwnedWorkers.layer),
+  Layer.provideMerge(
+    Layer.mergeAll(
+      WorkspaceAgentSearch.layer,
+      HistorySearch.layer.pipe(
+        Layer.provide(AgentSessionScanner.layer),
+        Layer.provide(ExternalHistoryReadersLayerLive),
+      ),
+      SkillManagement.layer,
+      ExternalMcpConnections.layer,
+      Memory.layer,
+      QualityRecords.layer,
+      AgentDocuments.layer,
+      AgentDocumentAssets.layer,
+      ThreadRuntimeService.layer,
+      RuntimeHooks.layer.pipe(Layer.provide(ProcessRunner.layer)),
+      SelfDevelopmentService.layer.pipe(Layer.provide(ProcessRunner.layer)),
+      ProviderDoctor.layer.pipe(
+        Layer.provide(WorkflowApprovals.layer),
+        Layer.provide(
+          ProviderDiagnosticRunner.layer.pipe(Layer.provide(ProviderSessionRuntime.layer)),
+        ),
+      ),
+    ),
+  ),
+  Layer.provideMerge(ProviderLayerLive.pipe(Layer.provideMerge(SharedWorkspaceActivity.layer))),
+  Layer.provideMerge(WorkspaceLayerLive),
   Layer.provideMerge(OrchestrationLayerLive),
 );
 
@@ -506,6 +591,23 @@ const ProviderInstallationRefreshLive = Layer.effectDiscard(
   }),
 );
 
+const ConfiguredIntegrationsLayerLive = Layer.unwrap(
+  Effect.gen(function* () {
+    const settings = yield* (yield* ServerSettings.ServerSettingsService).getSettings;
+    const config = yield* ServerConfig.ServerConfig;
+    const path = yield* Path.Path;
+    return IntegrationConfiguration.configuredLayer(
+      settings.optionalIntegrations ?? {},
+      path.join(config.attachmentsDir, "integration-images"),
+    );
+  }),
+).pipe(
+  Layer.provide(PreviewAutomationBroker.layer),
+  Layer.provide(ServerSecretStore.layer),
+  Layer.provide(ServerSettingsLayerLive),
+  Layer.provide(OrchestrationLayerLive),
+);
+
 const RuntimeCoreDependenciesLive = ReactorLayerLive.pipe(
   Layer.provideMerge(ProviderInstallationRefreshLive),
   Layer.provideMerge(ReplayMarkers.layer),
@@ -521,6 +623,7 @@ const RuntimeCoreDependenciesLive = ReactorLayerLive.pipe(
   Layer.provideMerge(GitLayerLive),
   Layer.provideMerge(VcsLayerLive),
   Layer.provideMerge(ProviderRuntimeLayerLive),
+  Layer.provideMerge(ConfiguredIntegrationsLayerLive),
   Layer.provideMerge(Layer.mergeAll(TerminalLayerLive, PreviewLayerLive, DeviceLayerLive)),
   Layer.provideMerge(PersistenceLayerLive),
   // Both read a user-owned file out of the state directory and stream changes
@@ -596,7 +699,9 @@ const McpSessionRegistryLive = Layer.unwrap(
   Effect.gen(function* () {
     const snapshots = yield* ProjectionSnapshotQuery.ProjectionSnapshotQuery;
     const settings = yield* ServerSettings.ServerSettingsService;
+    const sql = yield* SqlClient.SqlClient;
     return McpSessionRegistry.layer.pipe(
+      Layer.provide(Layer.succeed(SqlClient.SqlClient, sql)),
       Layer.provide(Layer.succeed(ProjectionSnapshotQuery.ProjectionSnapshotQuery, snapshots)),
       Layer.provide(Layer.succeed(ServerSettings.ServerSettingsService, settings)),
     );
@@ -627,7 +732,6 @@ export const makeRoutesLayer = Layer.mergeAll(
   // Both transports consume the same service instance, so caches single-flight across clients
   // and mutations observed on WebSocket invalidate patches subsequently read over HTTP.
   Layer.provide(PullRequestServiceLive),
-  Layer.provideMerge(OwnedWorkers.layer),
   Layer.provide(PreviewAutomationBroker.layer),
   Layer.provide(ServerSelfUpdate.layer.pipe(Layer.provide(DesktopAppUpdateLayerLive))),
   Layer.provide(commandReadinessLayer),

@@ -5,12 +5,18 @@ import * as Crypto from "effect/Crypto";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as SynchronizedRef from "effect/SynchronizedRef";
+import * as Option from "effect/Option";
+import * as SqlClient from "effect/unstable/sql/SqlClient";
 import { HttpServer } from "effect/unstable/http";
 import * as NetAddress from "effect/unstable/net/NetAddress";
 
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
 import * as McpInvocationContext from "./McpInvocationContext.ts";
 import * as McpProviderSession from "./McpProviderSession.ts";
+import {
+  NativeUnattendedActivation,
+  validateNativeUnattendedAuthority,
+} from "../orchestration/nativeUnattendedAuthority.ts";
 
 export interface McpCredentialRequest {
   readonly threadId: ThreadId;
@@ -52,6 +58,7 @@ interface CredentialRecord {
   readonly tokenHash: string;
   readonly scope: McpInvocationContext.McpInvocationScope;
   readonly lastAliveAt: number;
+  readonly unattendedOrigin?: NativeUnattendedActivation["Service"];
 }
 
 interface RegistryState {
@@ -99,6 +106,7 @@ const makeWithOptions = Effect.fn("McpSessionRegistry.make")(function* (
   const environmentId = yield* environment.getEnvironmentId;
   const httpServer = yield* HttpServer.HttpServer;
   const threadCapabilities = yield* McpInvocationContext.makeThreadMcpCapabilities;
+  const sql = yield* Effect.serviceOption(SqlClient.SqlClient);
   const state = yield* SynchronizedRef.make<RegistryState>({ records: new Map() });
   const currentTimeMillis = options.now ? Effect.sync(options.now) : Clock.currentTimeMillis;
   const livenessWindowMs = options.livenessWindowMs ?? DEFAULT_LIVENESS_WINDOW_MS;
@@ -120,6 +128,41 @@ const makeWithOptions = Effect.fn("McpSessionRegistry.make")(function* (
     return next.size === records.size ? records : next;
   };
 
+  const capturedGrantIsLive = (threadId: ThreadId, origin: NativeUnattendedActivation["Service"]) =>
+    Effect.gen(function* () {
+      if (Option.isNone(sql)) return false;
+      const authority = origin.authority;
+      const rows = yield* sql.value`SELECT g.grant_id FROM unattended_grants g
+        JOIN projection_threads owner ON owner.thread_id = g.owner_thread_id
+        JOIN projection_threads target ON target.thread_id = ${threadId}
+        WHERE g.grant_id = ${authority.grantId} AND g.revision = ${authority.grantRevision}
+          AND g.revoked = 0 AND g.owner_thread_id = ${authority.ownerThreadId}
+          AND g.project_id = target.project_id AND owner.project_id = target.project_id
+          AND owner.deleted_at IS NULL AND target.deleted_at IS NULL
+          AND (${authority.runtimeModeCeiling} != 'full-access' OR
+            (json_extract(g.ceiling_json, '$.runtimeMode') = 'full-access'
+              AND owner.runtime_mode = 'full-access' AND target.runtime_mode = 'full-access'))
+          AND NOT EXISTS (SELECT 1 FROM json_each(${JSON.stringify(authority.mcpCapabilityCeiling)}) cap
+            WHERE cap.value NOT IN (SELECT value FROM json_each(g.ceiling_json, '$.mcpCapabilities')))
+        LIMIT 1`;
+      return rows.length === 1;
+    }).pipe(Effect.catch(() => Effect.succeed(false)));
+
+  const captureOrigin = (threadId: ThreadId) =>
+    Effect.gen(function* () {
+      const origin = yield* Effect.serviceOption(NativeUnattendedActivation);
+      if (Option.isNone(origin)) return { origin: undefined, valid: true };
+      const valid = Option.isSome(sql)
+        ? yield* validateNativeUnattendedAuthority(
+            sql.value,
+            threadId,
+            undefined,
+            origin.value,
+          ).pipe(Effect.catch(() => Effect.succeed(false)))
+        : false;
+      return { origin: origin.value, valid };
+    });
+
   const issue: McpSessionRegistryShape["issue"] = Effect.fn("McpSessionRegistry.issue")(
     function* (request) {
       const issuedAt = yield* currentTimeMillis;
@@ -127,6 +170,7 @@ const makeWithOptions = Effect.fn("McpSessionRegistry.make")(function* (
       const rawToken = yield* crypto.randomBytes(32).pipe(Effect.map(tokenFromBytes), Effect.orDie);
       const tokenHash = yield* hashToken(rawToken);
       const liveCapabilities = yield* threadCapabilities(request.threadId);
+      const captured = yield* captureOrigin(request.threadId);
       const scope: McpInvocationContext.McpInvocationScope = {
         environmentId,
         threadId: ThreadId.make(request.threadId),
@@ -136,14 +180,22 @@ const makeWithOptions = Effect.fn("McpSessionRegistry.make")(function* (
           ["pull-requests" as const, ...request.capabilities].filter(
             (capability) =>
               (request.capabilityCeiling?.has(capability) ?? true) &&
-              (liveCapabilities?.has(capability) ?? true),
+              (liveCapabilities?.has(capability) ?? true) &&
+              captured.valid &&
+              (captured.origin?.authority.mcpCapabilityCeiling.includes(capability) ?? true),
           ),
         ),
+        ...(captured.origin ? { unattendedAuthority: captured.origin.authority } : {}),
         issuedAt,
       };
       yield* SynchronizedRef.update(state, ({ records }) => {
         const next = new Map(pruneDead(records, issuedAt));
-        next.set(tokenHash, { tokenHash, scope, lastAliveAt: issuedAt });
+        next.set(tokenHash, {
+          tokenHash,
+          scope,
+          lastAliveAt: issuedAt,
+          ...(captured.origin ? { unattendedOrigin: captured.origin } : {}),
+        });
         return { records: next };
       });
       return {
@@ -170,24 +222,33 @@ const makeWithOptions = Effect.fn("McpSessionRegistry.make")(function* (
       );
       if (!record) return undefined;
       const liveCapabilities = yield* threadCapabilities(record.scope.threadId);
-      return yield* SynchronizedRef.modify(state, ({ records }) => {
-        const current = pruneDead(records, timestamp);
-        const record = current.get(tokenHash);
-        if (!record) return [undefined, { records: current }] as const;
-        const next = new Map(current);
-        const scope = liveCapabilities
-          ? {
-              ...record.scope,
-              capabilities: new Set(
-                [...record.scope.capabilities].filter((capability) =>
-                  liveCapabilities.has(capability),
+      return yield* SynchronizedRef.modifyEffect(state, ({ records }) =>
+        Effect.gen(function* () {
+          const current = pruneDead(records, timestamp);
+          const record = current.get(tokenHash);
+          if (!record) return [undefined, { records: current }] as const;
+          const next = new Map(current);
+          if (
+            record.unattendedOrigin &&
+            !(yield* capturedGrantIsLive(record.scope.threadId, record.unattendedOrigin))
+          ) {
+            next.delete(tokenHash);
+            return [undefined, { records: next }] as const;
+          }
+          const scope = liveCapabilities
+            ? {
+                ...record.scope,
+                capabilities: new Set(
+                  [...record.scope.capabilities].filter((capability) =>
+                    liveCapabilities.has(capability),
+                  ),
                 ),
-              ),
-            }
-          : record.scope;
-        next.set(tokenHash, { ...record, scope, lastAliveAt: timestamp });
-        return [scope, { records: next }] as const;
-      });
+              }
+            : record.scope;
+          next.set(tokenHash, { ...record, scope, lastAliveAt: timestamp });
+          return [scope, { records: next }] as const;
+        }),
+      );
     },
   );
 
@@ -218,26 +279,41 @@ const makeWithOptions = Effect.fn("McpSessionRegistry.make")(function* (
     touch,
     restrictThreadCapabilities: Effect.fn("McpSessionRegistry.restrictThreadCapabilities")(
       function* (threadId, capabilities) {
-        yield* SynchronizedRef.update(state, ({ records }) => ({
-          records: new Map(
-            Array.from(records, ([tokenHash, record]) => [
-              tokenHash,
-              record.scope.threadId === threadId
-                ? {
-                    ...record,
-                    scope: {
-                      ...record.scope,
-                      capabilities: new Set(
-                        [...record.scope.capabilities].filter((capability) =>
-                          capabilities.has(capability),
-                        ),
-                      ),
-                    },
-                  }
-                : record,
-            ]),
-          ),
-        }));
+        const captured = yield* captureOrigin(threadId);
+        yield* SynchronizedRef.update(state, ({ records }) => {
+          const next = new Map(records);
+          for (const [tokenHash, record] of records) {
+            if (record.scope.threadId !== threadId) continue;
+            const origin = captured.origin ?? record.unattendedOrigin;
+            if (
+              captured.origin &&
+              record.unattendedOrigin &&
+              (captured.origin.authority.grantId !== record.unattendedOrigin.authority.grantId ||
+                captured.origin.authority.grantRevision !==
+                  record.unattendedOrigin.authority.grantRevision)
+            ) {
+              next.delete(tokenHash);
+              continue;
+            }
+            next.set(tokenHash, {
+              ...record,
+              ...(origin ? { unattendedOrigin: origin } : {}),
+              scope: {
+                ...record.scope,
+                ...(origin ? { unattendedAuthority: origin.authority } : {}),
+                capabilities: new Set(
+                  [...record.scope.capabilities].filter(
+                    (capability) =>
+                      capabilities.has(capability) &&
+                      captured.valid &&
+                      (origin?.authority.mcpCapabilityCeiling.includes(capability) ?? true),
+                  ),
+                ),
+              },
+            });
+          }
+          return { records: next };
+        });
       },
     ),
     revokeProviderSession: Effect.fn("McpSessionRegistry.revokeProviderSession")(

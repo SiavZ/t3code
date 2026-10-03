@@ -2304,6 +2304,7 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
             : undefined;
         const mcpSession = McpProviderSession.readMcpProviderSession(input.threadId);
         const runtimeInput: CodexSessionRuntimeOptions = {
+          ...(input.runtimeEpochId !== undefined ? { runtimeEpochId: input.runtimeEpochId } : {}),
           threadId: input.threadId,
           providerInstanceId: boundInstanceId,
           cwd: input.cwd ?? process.cwd(),
@@ -2514,7 +2515,13 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
               });
               return;
             }
-            yield* Queue.offerAll(runtimeEventQueue, runtimeEvents);
+            yield* Queue.offerAll(
+              runtimeEventQueue,
+              runtimeEvents.map((runtimeEvent) => ({
+                ...runtimeEvent,
+                runtimeEpochId: input.runtimeEpochId,
+              })),
+            );
           }),
         ).pipe(Effect.forkIn(sessionScope));
 

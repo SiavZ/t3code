@@ -1,3 +1,5 @@
+import { AgentDocumentsSection } from "./agent-documents/AgentDocumentsSection";
+import { OwnedWorkersView } from "./workers/OwnedWorkersView";
 import { isChatGptUsageLimitError } from "@t3tools/shared/usageLimits";
 import { useLoadBalancedEnvironment } from "../hooks/useLoadBalancedEnvironment";
 import { visibleThreadPullRequests } from "@t3tools/shared/threadPullRequests";
@@ -9806,6 +9808,24 @@ export default function ChatView(props: ChatViewProps) {
                 </div>
               </div>
             ) : null}
+            {!paintOnlyDisplayedTimeline && (
+              <AgentDocumentsSection
+                key={`${activeThread.environmentId}:${activeThread.id}`}
+                environmentId={activeThread.environmentId}
+                ownerThreadId={activeThread.id}
+                projectId={activeThread.projectId}
+                connected={activeEnvironmentConnectionPhase === "connected"}
+              />
+            )}
+            {!paintOnlyDisplayedTimeline && (
+              <OwnedWorkersView
+                key={`workers:${activeThread.environmentId}:${activeThread.id}`}
+                environmentId={activeThread.environmentId}
+                ownerThreadId={activeThread.id}
+                projectId={activeThread.projectId}
+                connected={activeEnvironmentConnectionPhase === "connected"}
+              />
+            )}
             {/* Banners overlay the timeline without changing its content height. */}
             <div className="pointer-events-none absolute inset-x-0 top-0 z-20 flex flex-col">
               <ProviderStatusBanner

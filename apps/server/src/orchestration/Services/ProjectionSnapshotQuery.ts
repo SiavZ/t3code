@@ -26,6 +26,7 @@ import type {
   OrchestrationThreadShell,
   ProjectId,
   ThreadId,
+  ThreadUnattendedAuthority,
   ThreadWorkerMetadata,
 } from "@t3tools/contracts";
 import * as Context from "effect/Context";
@@ -91,6 +92,9 @@ export interface WorkerThreadState {
 }
 
 export interface ProjectionSnapshotQueryShape {
+  readonly getThreadActivationAuthority: (
+    threadId: ThreadId,
+  ) => Effect.Effect<Option.Option<ThreadUnattendedAuthority>, ProjectionRepositoryError>;
   readonly getWorkerSpawnMetadata: (
     threadId: ThreadId,
   ) => Effect.Effect<Option.Option<ThreadWorkerMetadata>, ProjectionRepositoryError>;
@@ -277,7 +281,8 @@ export interface ProjectionSnapshotQueryShape {
     threadId: ThreadId,
   ) => Effect.Effect<
     Option.Option<
-      Pick<OrchestrationThreadShell, "id" | "projectId" | "title" | "titleState" | "session">
+      Pick<OrchestrationThreadShell, "id" | "projectId" | "title" | "titleState" | "session"> &
+        Pick<OrchestrationThread, "runtimeEpochId" | "runtimeHandoff">
     >,
     ProjectionRepositoryError
   >;

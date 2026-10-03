@@ -123,6 +123,7 @@ function createProviderServiceHarness() {
 
   const unsupported = () => Effect.die(new Error("Unsupported provider call in test")) as never;
   const service: ProviderServiceShape = {
+    startDiagnosticSession: () => unsupported(),
     startSession: () => unsupported(),
     sendTurn: () => unsupported(),
     compactThread: () => unsupported(),
@@ -439,6 +440,143 @@ describe("ProviderRuntimeIngestion", () => {
       drain,
     };
   }
+
+  effectIt.effect("fences a captured old callback released after new runtime activation", () =>
+    Effect.gen(function* () {
+      const harness = yield* Effect.promise(() => createHarness());
+      const threadId = asThreadId("thread-1");
+      const now = "2026-01-01T00:00:01.000Z";
+      const activate = (epochId: string) =>
+        Effect.promise(async () => {
+          const shell = await harness.readThreadShell();
+          await harness.dispatch({
+            type: "thread.runtime.handoff",
+            commandId: CommandId.make(`request-${epochId}`),
+            threadId,
+            operationId: epochId,
+            expectedUpdatedAt: shell.updatedAt,
+            epochId,
+            targetModelSelection: shell.modelSelection,
+            seed: {
+              text: "history",
+              sourceMessageIds: [],
+              omittedMessages: 0,
+              omittedAttachments: 0,
+              hiddenStatePreserved: false,
+            },
+            createdAt: now,
+          });
+          if (epochId === "new-epoch") {
+            const pending = await harness.readModel();
+            await harness.emitAndDrain([
+              {
+                runtimeEpochId: "old-epoch",
+                type: "session.state.changed",
+                eventId: asEventId("pending-old-state"),
+                provider: ProviderDriverKind.make("codex"),
+                threadId,
+                createdAt: now,
+                payload: { state: "error" },
+              },
+            ]);
+            expect(await harness.readModel()).toEqual(pending);
+          }
+          await harness.dispatch({
+            type: "thread.session.set",
+            commandId: CommandId.make(`stop-${epochId}`),
+            threadId,
+            session: {
+              threadId,
+              status: "stopped",
+              providerName: "codex",
+              runtimeMode: "approval-required",
+              activeTurnId: null,
+              updatedAt: now,
+              lastError: null,
+            },
+            createdAt: now,
+          });
+          await harness.dispatch({
+            type: "thread.runtime.handoff.commit",
+            commandId: CommandId.make(`commit-${epochId}`),
+            threadId,
+            expectedEpochId: epochId,
+            expectedNativeSessionId: null,
+            acknowledgedStopped: true,
+            createdAt: now,
+          });
+        });
+      yield* activate("old-epoch");
+      const captured = yield* Deferred.make<void>();
+      const release = yield* Deferred.make<void>();
+      const callback = yield* Effect.gen(function* () {
+        const origin = { runtimeEpochId: "old-epoch" };
+        yield* Deferred.succeed(captured, undefined);
+        yield* Deferred.await(release);
+        yield* Effect.promise(() =>
+          harness.emitAndDrain([
+            {
+              ...origin,
+              type: "thread.title.updated",
+              eventId: asEventId("late-title"),
+              provider: ProviderDriverKind.make("codex"),
+              threadId,
+              createdAt: now,
+              payload: { title: "contaminated" },
+            },
+            {
+              ...origin,
+              type: "turn.started",
+              eventId: asEventId("late-turn"),
+              provider: ProviderDriverKind.make("codex"),
+              threadId,
+              createdAt: now,
+              turnId: asTurnId("late-turn"),
+              payload: {},
+            },
+            {
+              ...origin,
+              type: "session.exited",
+              eventId: asEventId("late-exit"),
+              provider: ProviderDriverKind.make("codex"),
+              threadId,
+              createdAt: now,
+              payload: { exitKind: "error" },
+            },
+            {
+              type: "turn.started",
+              eventId: asEventId("missing-origin"),
+              provider: ProviderDriverKind.make("codex"),
+              threadId,
+              createdAt: now,
+              turnId: asTurnId("missing-origin-turn"),
+              payload: {},
+            },
+          ]),
+        );
+      }).pipe(Effect.forkChild);
+      yield* Deferred.await(captured);
+      yield* activate("new-epoch");
+      const before = yield* Effect.promise(harness.readModel);
+      yield* Deferred.succeed(release, undefined);
+      yield* Fiber.join(callback);
+      expect(yield* Effect.promise(harness.readModel)).toEqual(before);
+      yield* Effect.promise(() =>
+        harness.emitAndDrain([
+          {
+            runtimeEpochId: "new-epoch",
+            type: "session.state.changed",
+            eventId: asEventId("current-ready"),
+            provider: ProviderDriverKind.make("codex"),
+            threadId,
+            createdAt: now,
+            payload: { state: "ready" },
+          },
+        ]),
+      );
+      expect((yield* Effect.promise(harness.readThreadShell)).session?.status).toBe("ready");
+    }),
+  );
 
   it("maps turn started/completed events into thread session updates", async () => {
     const harness = await createHarness();

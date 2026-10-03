@@ -1,4 +1,5 @@
 import {
+  AuthAccessWriteScope,
   AuthOrchestrationOperateScope,
   AuthOrchestrationReadScope,
   AuthRelayReadScope,
@@ -15,6 +16,84 @@ import {
 } from "./RpcAuthorization.ts";
 
 describe("RPC authorization scopes", () => {
+  it("keeps parity observation readable without granting mutation or host execution", () => {
+    for (const method of [
+      WS_METHODS.agentDocumentsRead,
+      WS_METHODS.agentDocumentsWait,
+      WS_METHODS.coordinationRead,
+      WS_METHODS.coordinationMailboxRead,
+      WS_METHODS.memoryRecall,
+      WS_METHODS.memorySearch,
+      WS_METHODS.memoryRelated,
+      WS_METHODS.qualityRead,
+      WS_METHODS.qualitySubscribeChanges,
+      WS_METHODS.scheduledList,
+      WS_METHODS.scheduledGet,
+      WS_METHODS.ambientGet,
+      WS_METHODS.backgroundJobList,
+      WS_METHODS.backgroundJobOutput,
+      WS_METHODS.backgroundJobWait,
+      WS_METHODS.agentSearch,
+      WS_METHODS.historySearch,
+      WS_METHODS.skillsRead,
+      WS_METHODS.externalMcpList,
+      WS_METHODS.externalMcpSearch,
+      WS_METHODS.providerDoctorGet,
+    ])
+      expect(requiredScopeForRpcMethod(method)).toBe(AuthOrchestrationReadScope);
+    for (const method of [
+      WS_METHODS.agentDocumentsWrite,
+      WS_METHODS.agentDocumentsAction,
+      WS_METHODS.agentDocumentsPrepareAsset,
+      WS_METHODS.coordinationWrite,
+      WS_METHODS.coordinationMailboxWrite,
+      WS_METHODS.memoryRemember,
+      WS_METHODS.memoryForget,
+      WS_METHODS.qualityUpdate,
+      WS_METHODS.scheduledCreate,
+      WS_METHODS.scheduledCancel,
+      WS_METHODS.backgroundJobStart,
+      WS_METHODS.backgroundJobCancel,
+      WS_METHODS.backgroundJobSubscribe,
+      WS_METHODS.historyImport,
+      WS_METHODS.skillsLoad,
+      WS_METHODS.externalMcpCall,
+      WS_METHODS.runtimeHandoff,
+      WS_METHODS.runtimeFork,
+    ])
+      expect(requiredScopeForRpcMethod(method)).toBe(AuthOrchestrationOperateScope);
+  });
+
+  it("requires administrative permission before granting unattended authority or configuring executable integrations", () => {
+    for (const method of [
+      WS_METHODS.unattendedGrantCreate,
+      WS_METHODS.unattendedGrantRevoke,
+      WS_METHODS.ambientConfigure,
+      WS_METHODS.externalMcpConfigure,
+      WS_METHODS.externalMcpRemove,
+      WS_METHODS.runtimeHooksConfigure,
+      WS_METHODS.runtimeHooksRemove,
+      WS_METHODS.integrationApprovalGrant,
+      WS_METHODS.gmailBeginConnect,
+      WS_METHODS.gmailCompleteConnect,
+      WS_METHODS.gmailDisconnect,
+      WS_METHODS.desktopConnect,
+      WS_METHODS.memoryGlobalRead,
+      WS_METHODS.providerDoctorRunApproved,
+      WS_METHODS.providerDoctorCancel,
+      WS_METHODS.memoryGlobalWrite,
+      WS_METHODS.desktopAuthorize,
+      WS_METHODS.desktopRespond,
+      WS_METHODS.desktopDisconnect,
+      WS_METHODS.desktopLease,
+      WS_METHODS.desktopRevoke,
+      WS_METHODS.sourceDevelopmentConfigure,
+      WS_METHODS.sourceDevelopmentBuild,
+      WS_METHODS.sourceDevelopmentCancel,
+      WS_METHODS.sourceDevelopmentReload,
+    ])
+      expect(requiredScopeForRpcMethod(method)).toBe(AuthAccessWriteScope);
+  });
   it("declares exactly one scope for every RPC in the server group", () => {
     expect(new Set(Object.keys(RPC_REQUIRED_SCOPES))).toEqual(new Set(WsRpcGroup.requests.keys()));
   });

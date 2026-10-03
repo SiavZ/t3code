@@ -86,7 +86,12 @@ import * as ServerConfig from "../../config.ts";
 import * as ServerSettings from "../../serverSettings.ts";
 import * as AnalyticsService from "../../telemetry/AnalyticsService.ts";
 import { makeAdapterRegistryMock } from "../testUtils/providerAdapterRegistryMock.ts";
+import { NativeActivationCancellation } from "../../orchestration/activationCancellationFence.ts";
 import * as ProjectionSnapshotQuery from "../../orchestration/Services/ProjectionSnapshotQuery.ts";
+import { OrchestrationProjectionSnapshotQueryLive } from "../../orchestration/Layers/ProjectionSnapshotQuery.ts";
+import * as ThreadBackgroundLiveness from "../../orchestration/ThreadBackgroundLiveness.ts";
+import * as ThreadPlanProgress from "../../orchestration/ThreadPlanProgress.ts";
+import * as RepositoryIdentityResolver from "../../project/RepositoryIdentityResolver.ts";
 
 const encodeJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
 const defaultServerSettingsLayer = ServerSettings.ServerSettingsService.layerTest();
@@ -5078,6 +5083,9 @@ describe("agent browser access", () => {
     projectOverride?: boolean | { readonly browser?: boolean; readonly device?: boolean },
     options?: {
       deleted?: boolean;
+      readonly productionQuery?: boolean;
+      readonly noDurableThread?: boolean;
+      readonly withSql?: boolean;
       readonly realCredentials?: boolean;
       readonly withoutOrchestration?: boolean;
       readonly adapter?: ReturnType<typeof makeFakeCodexAdapter>;
@@ -5085,6 +5093,11 @@ describe("agent browser access", () => {
       readonly runtimeMode?: RuntimeMode;
       ownerRuntimeMode?: RuntimeMode;
       readonly launchArgs?: string;
+      readonly environment?: import("@t3tools/contracts").ProviderInstanceEnvironment;
+      readonly runInstead?: (
+        provider: ProviderService.ProviderService["Service"],
+        sql?: SqlClient.SqlClient,
+      ) => Effect.Effect<void, ProviderServiceError>;
       readonly afterStart?: (
         provider: ProviderService.ProviderService["Service"],
       ) => Effect.Effect<void, ProviderServiceError>;
@@ -5106,6 +5119,7 @@ describe("agent browser access", () => {
         Layer.provide(runtimeRepositoryLayer),
       );
       const projectionLayer = Layer.succeed(ProjectionSnapshotQuery.ProjectionSnapshotQuery, {
+        getThreadActivationAuthority: () => Effect.succeedNone,
         getWorkerSpawnMetadata: (id) =>
           Effect.succeed(Option.fromNullishOr(id === threadId ? options?.worker : undefined)),
         getWorkerAdmissionStates: () => Effect.die("unused"),
@@ -5130,10 +5144,22 @@ describe("agent browser access", () => {
         getFirstActiveThreadIdByProjectId: () => Effect.die("unused"),
         getThreadCheckpointContext: () => Effect.die("unused"),
         getFullThreadDiffContext: () => Effect.die("unused"),
-        getThreadRuntimeContext: () => Effect.die("unused"),
+        getThreadRuntimeContext: (id) =>
+          Effect.succeed(
+            options?.noDurableThread
+              ? Option.none()
+              : Option.some({
+                  id,
+                  projectId,
+                  title: "Browser access test",
+                  titleState: null,
+                  session: null,
+                }),
+          ),
         getThreadShellById: (requestedThreadId) =>
           Effect.gen(function* () {
-            if (requestedThreadId === threadId && options?.deleted) return Option.none();
+            if (options?.noDurableThread || (requestedThreadId === threadId && options?.deleted))
+              return Option.none();
             assert.isTrue(
               requestedThreadId === threadId ||
                 requestedThreadId === options?.worker?.ownerThreadId,
@@ -5168,6 +5194,16 @@ describe("agent browser access", () => {
         getThreadDetailSnapshot: () => Effect.die("unused"),
         searchThreads: () => Effect.die("unused"),
       });
+      const productionProjectionLayer = OrchestrationProjectionSnapshotQueryLive.pipe(
+        Layer.provide(ThreadBackgroundLiveness.layer),
+        Layer.provide(ThreadPlanProgress.layer),
+        Layer.provide(
+          Layer.succeed(RepositoryIdentityResolver.RepositoryIdentityResolver, {
+            resolve: () => Effect.succeed(null),
+          }),
+        ),
+        Layer.provideMerge(SqlitePersistenceMemory),
+      );
       const providerLayer = makeProviderServiceLive({
         issueMcpCredential: (request) =>
           options?.realCredentials
@@ -5182,15 +5218,25 @@ describe("agent browser access", () => {
       }).pipe(
         Layer.provide(providerAdapterLayer),
         Layer.provide(directoryLayer),
-        Layer.provide(options?.withoutOrchestration ? Layer.empty : projectionLayer),
+        Layer.provide(
+          options?.withoutOrchestration
+            ? Layer.empty
+            : options?.productionQuery
+              ? productionProjectionLayer
+              : projectionLayer,
+        ),
         Layer.provide(
           ServerSettings.ServerSettingsService.layerTest({
-            ...(options?.launchArgs !== undefined
+            ...(options?.launchArgs !== undefined || options?.environment !== undefined
               ? {
                   providerInstances: {
                     [codexInstanceId]: {
                       driver: CODEX_DRIVER,
-                      config: { launchArgs: options.launchArgs },
+                      config:
+                        options?.launchArgs !== undefined ? { launchArgs: options.launchArgs } : {},
+                      ...(options?.environment !== undefined
+                        ? { environment: options.environment }
+                        : {}),
                     },
                   },
                 }
@@ -5226,6 +5272,11 @@ describe("agent browser access", () => {
 
       yield* Effect.gen(function* () {
         const provider = yield* ProviderService.ProviderService;
+        if (options?.runInstead)
+          return yield* options.runInstead(
+            provider,
+            Option.getOrUndefined(yield* Effect.serviceOption(SqlClient.SqlClient)),
+          );
         yield* provider.startSession(threadId, {
           provider: CODEX_DRIVER,
           providerInstanceId: codexInstanceId,
@@ -5233,7 +5284,13 @@ describe("agent browser access", () => {
           runtimeMode: options?.runtimeMode ?? "full-access",
         });
         if (options?.afterStart) yield* options.afterStart(provider);
-      }).pipe(Effect.provide(providerLayer));
+      }).pipe(
+        Effect.provide(
+          options?.withSql
+            ? providerLayer.pipe(Layer.provideMerge(SqlitePersistenceMemory))
+            : providerLayer,
+        ),
+      );
 
       return issued;
     });
@@ -5299,6 +5356,19 @@ describe("agent browser access", () => {
               const result = yield* Fiber.join(stopping);
               assert.equal(Exit.isFailure(result), failStop);
               assert.isUndefined(yield* registry.resolve(token));
+              if (failStop) {
+                const nativeStarts = adapter.startSession.mock.calls.length;
+                const replacement = yield* provider
+                  .startSession(threadId, {
+                    provider: CODEX_DRIVER,
+                    providerInstanceId: codexInstanceId,
+                    threadId,
+                    runtimeMode: "full-access",
+                  })
+                  .pipe(Effect.exit);
+                assert.isTrue(Exit.isFailure(replacement));
+                assert.equal(adapter.startSession.mock.calls.length, nativeStarts);
+              }
             }),
         });
       }).pipe(Effect.provide(credentialRegistryLayer), Effect.provide(NodeServices.layer)),
@@ -5450,6 +5520,476 @@ describe("agent browser access", () => {
     }).pipe(Effect.provide(credentialRegistryLayer), Effect.provide(NodeServices.layer)),
   );
 
+  for (const failCleanup of [false, true]) {
+    it.effect(
+      `waits for rejected native startup cleanup before replacement (failure=${failCleanup})`,
+      () =>
+        Effect.gen(function* () {
+          const enteredStart = yield* Deferred.make<void>();
+          const releaseStart = yield* Deferred.make<void>();
+          const enteredStop = yield* Deferred.make<void>();
+          const releaseStop = yield* Deferred.make<void>();
+          const replacementAttempted = yield* Deferred.make<void>();
+          const adapter = makeFakeCodexAdapter();
+          const start = adapter.startSession.getMockImplementation()!;
+          const stop = adapter.stopSession.getMockImplementation()!;
+          let starts = 0;
+          const order: string[] = [];
+          adapter.startSession.mockImplementation((input) =>
+            Effect.gen(function* () {
+              starts += 1;
+              order.push(`start:${starts}`);
+              const session = yield* start(input);
+              if (starts === 1) {
+                yield* Deferred.succeed(enteredStart, undefined);
+                yield* Deferred.await(releaseStart);
+              }
+              return session;
+            }),
+          );
+          adapter.stopSession.mockImplementation((id) =>
+            Effect.gen(function* () {
+              order.push("stop:entered");
+              yield* Deferred.succeed(enteredStop, undefined);
+              yield* Deferred.await(releaseStop);
+              if (failCleanup)
+                return yield* new ProviderAdapterRequestError({
+                  provider: String(CODEX_DRIVER),
+                  method: "stopSession",
+                  detail: "cleanup stop failed",
+                });
+              yield* stop(id);
+              order.push("stop:ack");
+            }),
+          );
+          const threadId = ThreadId.make(`serialized-native-start-${failCleanup}`);
+          const options = {
+            adapter,
+            worker: workerMetadata("full-access"),
+            ownerRuntimeMode: "full-access" as RuntimeMode,
+            runInstead: (provider: ProviderService.ProviderService["Service"]) =>
+              Effect.gen(function* () {
+                const input = {
+                  provider: CODEX_DRIVER,
+                  providerInstanceId: codexInstanceId,
+                  threadId,
+                  runtimeMode: "full-access" as const,
+                };
+                const oldStart = yield* provider
+                  .startSession(threadId, input)
+                  .pipe(Effect.exit, Effect.forkChild);
+                yield* Deferred.await(enteredStart);
+                options.ownerRuntimeMode = "approval-required";
+                yield* Deferred.succeed(releaseStart, undefined);
+                yield* Deferred.await(enteredStop);
+                // Replacement is now permitted by policy, but not by the native lifecycle until ACK.
+                options.ownerRuntimeMode = "full-access";
+                const replacement = yield* Deferred.succeed(replacementAttempted, undefined).pipe(
+                  Effect.andThen(provider.startSession(threadId, input)),
+                  Effect.exit,
+                  Effect.forkChild,
+                );
+                yield* Deferred.await(replacementAttempted);
+                assert.equal(starts, 1);
+                yield* Deferred.succeed(releaseStop, undefined);
+                assert.isTrue(Exit.isFailure(yield* Fiber.join(oldStart)));
+                const replacementExit = yield* Fiber.join(replacement);
+                if (failCleanup) {
+                  assert.isTrue(Exit.isFailure(replacementExit));
+                  assert.equal(starts, 1);
+                  assert.deepEqual(order, ["start:1", "stop:entered"]);
+                  adapter.stopSession.mockImplementation(stop);
+                  yield* provider.stopSession({ threadId });
+                  yield* provider.startSession(threadId, input);
+                  assert.equal(starts, 2);
+                  assert.equal((yield* provider.listSessions()).length, 1);
+                } else {
+                  assert.isTrue(Exit.isSuccess(replacementExit));
+                  assert.deepEqual(order, ["start:1", "stop:entered", "stop:ack", "start:2"]);
+                  assert.equal((yield* provider.listSessions()).length, 1);
+                }
+              }),
+          };
+          yield* startSessionWith(false, threadId, undefined, options);
+        }).pipe(Effect.provide(NodeServices.layer)),
+    );
+  }
+
+  it.effect("waits for native startup readiness before reusing a mapped session for send", () =>
+    Effect.gen(function* () {
+      const enteredStart = yield* Deferred.make<void>();
+      const releaseStart = yield* Deferred.make<void>();
+      const enteredStop = yield* Deferred.make<void>();
+      const releaseStop = yield* Deferred.make<void>();
+      const sendAttempted = yield* Deferred.make<void>();
+      const adapter = makeFakeCodexAdapter();
+      const start = adapter.startSession.getMockImplementation()!;
+      const stop = adapter.stopSession.getMockImplementation()!;
+      const send = adapter.sendTurn.getMockImplementation()!;
+      const threadId = ThreadId.make("native-readiness-send");
+      const order: string[] = [];
+      let starts = 0;
+      const options = {
+        adapter,
+        worker: workerMetadata("full-access"),
+        ownerRuntimeMode: "full-access" as RuntimeMode,
+        runInstead: (provider: ProviderService.ProviderService["Service"]) =>
+          Effect.gen(function* () {
+            const input = {
+              provider: CODEX_DRIVER,
+              providerInstanceId: codexInstanceId,
+              threadId,
+              runtimeMode: "full-access" as const,
+            };
+            // Keep a real stopped binding so the follow-up send takes the ordinary recovery path.
+            yield* provider.startSession(threadId, input);
+            yield* provider.stopSession({ threadId });
+            adapter.startSession.mockImplementation((nativeInput) =>
+              Effect.gen(function* () {
+                starts += 1;
+                order.push(`start:${starts}`);
+                const session = yield* start(nativeInput);
+                if (starts === 1) {
+                  yield* Deferred.succeed(enteredStart, undefined);
+                  yield* Deferred.await(releaseStart);
+                }
+                return session;
+              }),
+            );
+            adapter.stopSession.mockImplementation((id) =>
+              Effect.gen(function* () {
+                order.push("stop:entered");
+                yield* Deferred.succeed(enteredStop, undefined);
+                yield* Deferred.await(releaseStop);
+                yield* stop(id);
+                order.push("stop:ack");
+              }),
+            );
+            adapter.sendTurn.mockImplementation((nativeInput) =>
+              Effect.sync(() => {
+                order.push("send");
+              }).pipe(Effect.andThen(send(nativeInput))),
+            );
+            const oldStart = yield* provider
+              .startSession(threadId, input)
+              .pipe(Effect.exit, Effect.forkChild);
+            yield* Deferred.await(enteredStart);
+            const followUp = yield* Deferred.succeed(sendAttempted, undefined).pipe(
+              Effect.andThen(provider.sendTurn({ threadId, input: "replacement prompt" })),
+              Effect.forkChild,
+            );
+            yield* Deferred.await(sendAttempted);
+            assert.deepEqual(order, ["start:1"]);
+            options.ownerRuntimeMode = "approval-required";
+            yield* Deferred.succeed(releaseStart, undefined);
+            yield* Deferred.await(enteredStop);
+            assert.deepEqual(order, ["start:1", "stop:entered"]);
+            options.ownerRuntimeMode = "full-access";
+            yield* Deferred.succeed(releaseStop, undefined);
+            assert.isTrue(Exit.isFailure(yield* Fiber.join(oldStart)));
+            yield* Fiber.join(followUp);
+            assert.deepEqual(order, ["start:1", "stop:entered", "stop:ack", "start:2", "send"]);
+          }),
+      };
+      yield* startSessionWith(false, threadId, undefined, options);
+    }).pipe(Effect.provide(NodeServices.layer)),
+  );
+
+  it.effect(
+    "does not let a stale conditional stop revoke a replacement paused in native startup",
+    () =>
+      Effect.gen(function* () {
+        const registry = yield* McpSessionRegistry.McpSessionRegistry;
+        const enteredStart = yield* Deferred.make<void>();
+        const releaseStart = yield* Deferred.make<void>();
+        const stopAttempted = yield* Deferred.make<void>();
+        const adapter = makeFakeCodexAdapter();
+        const start = adapter.startSession.getMockImplementation()!;
+        adapter.startSession.mockImplementation((input) =>
+          start(input).pipe(
+            Effect.tap(() => Deferred.succeed(enteredStart, undefined)),
+            Effect.tap(() => Deferred.await(releaseStart)),
+          ),
+        );
+        const threadId = ThreadId.make("stale-stop-replacement");
+        const oldMessageId = MessageId.make("old-stop-message");
+        yield* startSessionWith(false, threadId, undefined, {
+          adapter,
+          realCredentials: true,
+          withSql: true,
+          runInstead: (provider, sql) =>
+            Effect.gen(function* () {
+              if (!sql) return yield* Effect.die("Missing isolated SQLite");
+              yield* sql`INSERT INTO projection_turn_cancellations (thread_id,message_id,event_sequence) VALUES (${threadId},${oldMessageId},1)`.pipe(
+                Effect.orDie,
+              );
+              const replacement = yield* provider
+                .startSession(threadId, {
+                  provider: CODEX_DRIVER,
+                  providerInstanceId: codexInstanceId,
+                  threadId,
+                  runtimeMode: "full-access",
+                })
+                .pipe(Effect.forkChild);
+              yield* Deferred.await(enteredStart);
+              const token =
+                McpProviderSession.readMcpProviderSession(threadId)!.authorizationHeader.slice(7);
+              assert.isDefined(yield* registry.resolve(token));
+              const bindingBefore =
+                yield* sql`SELECT * FROM provider_session_runtime WHERE thread_id = ${threadId}`.pipe(
+                  Effect.orDie,
+                );
+              const staleStop = yield* Deferred.succeed(stopAttempted, undefined).pipe(
+                Effect.andThen(
+                  provider.stopSession({ threadId }).pipe(
+                    Effect.provideService(NativeActivationCancellation, {
+                      threadId,
+                      sequence: 1,
+                      expectedMessageId: oldMessageId,
+                    }),
+                  ),
+                ),
+                Effect.exit,
+                Effect.forkChild,
+              );
+              yield* Deferred.await(stopAttempted);
+              // The later durable activation supersedes A while B is still awaiting its native ACK.
+              yield* sql`INSERT INTO orchestration_events (sequence,event_id,aggregate_kind,stream_id,stream_version,event_type,occurred_at,actor_kind,payload_json,metadata_json)
+            VALUES (2,'replacement-start','thread',${threadId},1,'thread.turn-start-requested','2026-10-03T00:00:00.000Z','user','{}','{}')`.pipe(
+                Effect.orDie,
+              );
+              assert.isDefined(yield* registry.resolve(token));
+              const bindingPaused =
+                yield* sql`SELECT * FROM provider_session_runtime WHERE thread_id = ${threadId}`.pipe(
+                  Effect.orDie,
+                );
+              assert.deepEqual(bindingPaused, bindingBefore);
+              yield* Deferred.succeed(releaseStart, undefined);
+              yield* Fiber.join(replacement);
+              assert.isTrue(Exit.isFailure(yield* Fiber.join(staleStop)));
+              assert.isDefined(yield* registry.resolve(token));
+              assert.equal(adapter.stopSession.mock.calls.length, 0);
+              assert.equal((yield* provider.listSessions()).length, 1);
+            }),
+        });
+      }).pipe(Effect.provide(credentialRegistryLayer), Effect.provide(NodeServices.layer)),
+  );
+
+  it.effect("rejects a superseded conditional interrupt after asynchronous routing", () =>
+    Effect.gen(function* () {
+      const enteredRoute = yield* Deferred.make<void>();
+      const releaseRoute = yield* Deferred.make<void>();
+      const adapter = makeFakeCodexAdapter();
+      const hasSession = adapter.hasSession.getMockImplementation()!;
+      const threadId = ThreadId.make("stale-interrupt-routing");
+      const oldMessageId = MessageId.make("old-interrupt-message");
+      yield* startSessionWith(false, threadId, undefined, {
+        adapter,
+        withSql: true,
+        runInstead: (provider, sql) =>
+          Effect.gen(function* () {
+            if (!sql) return yield* Effect.die("Missing isolated SQLite");
+            yield* provider.startSession(threadId, {
+              provider: CODEX_DRIVER,
+              providerInstanceId: codexInstanceId,
+              threadId,
+              runtimeMode: "full-access",
+            });
+            yield* sql`INSERT INTO projection_turn_cancellations (thread_id,message_id,event_sequence) VALUES (${threadId},${oldMessageId},1)`.pipe(
+              Effect.orDie,
+            );
+            adapter.hasSession.mockImplementation((id) =>
+              Deferred.succeed(enteredRoute, undefined).pipe(
+                Effect.andThen(Deferred.await(releaseRoute)),
+                Effect.andThen(hasSession(id)),
+              ),
+            );
+            const interruption = yield* provider.interruptTurn({ threadId }).pipe(
+              Effect.provideService(NativeActivationCancellation, {
+                threadId,
+                sequence: 1,
+                expectedMessageId: oldMessageId,
+              }),
+              Effect.exit,
+              Effect.forkChild,
+            );
+            yield* Deferred.await(enteredRoute);
+            yield* sql`INSERT INTO orchestration_events (sequence,event_id,aggregate_kind,stream_id,stream_version,event_type,occurred_at,actor_kind,payload_json,metadata_json)
+            VALUES (2,'replacement-interrupt','thread',${threadId},1,'thread.turn-start-requested','2026-10-03T00:00:00.000Z','user','{}','{}')`.pipe(
+              Effect.orDie,
+            );
+            yield* Deferred.succeed(releaseRoute, undefined);
+            assert.isTrue(Exit.isFailure(yield* Fiber.join(interruption)));
+            assert.equal(adapter.interruptTurn.mock.calls.length, 0);
+            assert.equal(adapter.stopSession.mock.calls.length, 0);
+          }),
+      });
+    }).pipe(Effect.provide(NodeServices.layer)),
+  );
+
+  it.effect(
+    "streams only explicitly registered disposable diagnostic origins until native stop acknowledgment",
+    () =>
+      Effect.gen(function* () {
+        const adapter = makeFakeCodexAdapter();
+        const stop = adapter.stopSession.getMockImplementation()!;
+        const enteredStop = yield* Deferred.make<void>();
+        const releaseStop = yield* Deferred.make<void>();
+        const threadId = ThreadId.make("diagnostic-explicit-origin");
+        const issued = yield* startSessionWith(false, threadId, undefined, {
+          adapter,
+          noDurableThread: true,
+          productionQuery: true,
+          withSql: true,
+          runInstead: (provider, sql) =>
+            Effect.scoped(
+              Effect.gen(function* () {
+                if (!sql) return yield* Effect.die("Missing isolated SQLite");
+                const pull = (yield* Stream.toPull(provider.streamEvents)).pipe(Effect.orDie);
+                const firstEvent = yield* pull.pipe(Effect.forkChild);
+                yield* Effect.yieldNow;
+                const input = {
+                  provider: CODEX_DRIVER,
+                  providerInstanceId: codexInstanceId,
+                  threadId,
+                  modelSelection: createModelSelection(codexInstanceId, "gpt-5.4"),
+                  cwd: fixtureCwd("diagnostic-explicit-origin"),
+                  runtimeMode: "approval-required" as const,
+                  sandboxMode: "read-only" as const,
+                  approvalPolicy: "untrusted" as const,
+                };
+                const emit = (id: string, target = threadId, epoch?: string) =>
+                  adapter.emit({
+                    type: "session.ready",
+                    eventId: asEventId(id),
+                    provider: CODEX_DRIVER,
+                    createdAt: "2026-10-03T00:00:00.000Z",
+                    threadId: target,
+                    payload: {},
+                    ...(epoch !== undefined ? { runtimeEpochId: epoch } : {}),
+                  });
+                emit("diagnostic-prefix-unregistered", ThreadId.make("diagnostic:pretend"));
+                yield* provider.startDiagnosticSession(threadId, input);
+                emit("diagnostic-epoch-forbidden", threadId, "old-epoch");
+                emit("diagnostic-valid");
+                assert.deepEqual(
+                  (yield* Fiber.join(firstEvent)).map((event) => event.eventId),
+                  [asEventId("diagnostic-valid")],
+                );
+                const ordinaryReplacement = yield* provider
+                  .startSession(threadId, input)
+                  .pipe(Effect.exit);
+                assert.isTrue(Exit.isFailure(ordinaryReplacement));
+                adapter.stopSession.mockImplementation((id) =>
+                  Deferred.succeed(enteredStop, undefined).pipe(
+                    Effect.andThen(Deferred.await(releaseStop)),
+                    Effect.andThen(stop(id)),
+                  ),
+                );
+                const stopping = yield* provider.stopSession({ threadId }).pipe(Effect.forkChild);
+                yield* Deferred.await(enteredStop);
+                emit("diagnostic-before-stop-ack");
+                assert.deepEqual(
+                  (yield* pull).map((event) => event.eventId),
+                  [asEventId("diagnostic-before-stop-ack")],
+                );
+                yield* Deferred.succeed(releaseStop, undefined);
+                yield* Fiber.join(stopping);
+                yield* sql`DELETE FROM provider_session_runtime WHERE thread_id = ${threadId}`.pipe(
+                  Effect.orDie,
+                );
+                const startsBeforeReuse = adapter.startSession.mock.calls.length;
+                assert.isTrue(
+                  Exit.isFailure(
+                    yield* provider.startDiagnosticSession(threadId, input).pipe(Effect.exit),
+                  ),
+                );
+                assert.isTrue(
+                  Exit.isFailure(yield* provider.startSession(threadId, input).pipe(Effect.exit)),
+                );
+                assert.equal(adapter.startSession.mock.calls.length, startsBeforeReuse);
+                emit("diagnostic-after-stop-ack");
+                const markerThread = ThreadId.make("diagnostic-marker-origin");
+                yield* provider.startDiagnosticSession(markerThread, {
+                  ...input,
+                  threadId: markerThread,
+                });
+                emit("diagnostic-marker", markerThread);
+                assert.deepEqual(
+                  (yield* pull).map((event) => event.eventId),
+                  [asEventId("diagnostic-marker")],
+                );
+                yield* provider.stopSession({ threadId: markerThread });
+                assert.isUndefined(McpProviderSession.readMcpProviderSession(threadId));
+              }),
+            ),
+        });
+        assert.deepEqual(issued, []);
+      }).pipe(Effect.provide(NodeServices.layer)),
+  );
+
+  it.effect("rejects durable and unsafe disposable diagnostic starts before native dispatch", () =>
+    Effect.gen(function* () {
+      const threadId = ThreadId.make("diagnostic-safety");
+      const input = {
+        provider: CODEX_DRIVER,
+        providerInstanceId: codexInstanceId,
+        threadId,
+        modelSelection: createModelSelection(codexInstanceId, "gpt-5.4"),
+        cwd: fixtureCwd("diagnostic-safety"),
+        runtimeMode: "approval-required" as const,
+        sandboxMode: "read-only" as const,
+        approvalPolicy: "untrusted" as const,
+      };
+      for (const noDurableThread of [false, true]) {
+        const adapter = makeFakeCodexAdapter();
+        yield* startSessionWith(false, threadId, undefined, {
+          adapter,
+          noDurableThread,
+          runInstead: (provider) =>
+            Effect.gen(function* () {
+              if (!noDurableThread) {
+                assert.isTrue(
+                  Exit.isFailure(
+                    yield* provider.startDiagnosticSession(threadId, input).pipe(Effect.exit),
+                  ),
+                );
+              } else {
+                for (const unsafe of [
+                  { ...input, runtimeEpochId: "epoch" },
+                  { ...input, resumeCursor: {} },
+                  { ...input, runtimeMode: "full-access" as const },
+                  { ...input, sandboxMode: "workspace-write" as const },
+                  { ...input, approvalPolicy: "never" as const },
+                ])
+                  assert.isTrue(
+                    Exit.isFailure(
+                      yield* provider.startDiagnosticSession(threadId, unsafe).pipe(Effect.exit),
+                    ),
+                  );
+              }
+              assert.equal(adapter.startSession.mock.calls.length, 0);
+            }),
+        });
+      }
+      const unsafeAdapter = makeFakeCodexAdapter();
+      yield* startSessionWith(false, threadId, undefined, {
+        adapter: unsafeAdapter,
+        noDurableThread: true,
+        launchArgs: "--yolo",
+        runInstead: (provider) =>
+          Effect.gen(function* () {
+            assert.isTrue(
+              Exit.isFailure(
+                yield* provider.startDiagnosticSession(threadId, input).pipe(Effect.exit),
+              ),
+            );
+            assert.equal(unsafeAdapter.startSession.mock.calls.length, 0);
+          }),
+      });
+    }).pipe(Effect.provide(NodeServices.layer)),
+  );
+
   it.effect("never grants workers or preview beyond an immutable worker capability ceiling", () =>
     Effect.gen(function* () {
       const threadId = ThreadId.make("worker-limited-capabilities");
@@ -5542,6 +6082,44 @@ describe("agent browser access", () => {
         assert.include(error.message, "launch arguments");
       }
       assert.equal(adapter.startSession.mock.calls.length, 0);
+    }).pipe(Effect.provide(NodeServices.layer)),
+  );
+
+  it.effect("uses the final Codex environment override for restricted launch checks", () =>
+    Effect.gen(function* () {
+      const unsafeAdapter = makeFakeCodexAdapter();
+      const error = yield* startSessionWith(
+        true,
+        ThreadId.make("worker-duplicate-unsafe-environment"),
+        undefined,
+        {
+          adapter: unsafeAdapter,
+          worker: workerMetadata(),
+          runtimeMode: "approval-required",
+          launchArgs: "--sandbox=read-only",
+          environment: [
+            { name: "T3CODE_CODEX_LAUNCH_ARGS", value: "--sandbox=read-only", sensitive: false },
+            { name: "T3CODE_CODEX_LAUNCH_ARGS", value: "--yolo", sensitive: false },
+          ],
+        },
+      ).pipe(Effect.flip);
+      assert.instanceOf(error, ProviderValidationError);
+      assert.include(error.message, "launch arguments");
+      assert.equal(unsafeAdapter.startSession.mock.calls.length, 0);
+
+      const safeAdapter = makeFakeCodexAdapter();
+      yield* startSessionWith(true, ThreadId.make("worker-duplicate-safe-environment"), undefined, {
+        adapter: safeAdapter,
+        worker: workerMetadata(),
+        runtimeMode: "approval-required",
+        launchArgs: "--yolo",
+        environment: [
+          { name: "T3CODE_CODEX_LAUNCH_ARGS", value: "--yolo", sensitive: false },
+          { name: "T3CODE_CODEX_LAUNCH_ARGS", value: "--sandbox=read-only", sensitive: false },
+        ],
+      });
+      assert.equal(safeAdapter.startSession.mock.calls.length, 1);
+      assert.equal(safeAdapter.startSession.mock.calls[0]?.[0].runtimeMode, "approval-required");
     }).pipe(Effect.provide(NodeServices.layer)),
   );
 

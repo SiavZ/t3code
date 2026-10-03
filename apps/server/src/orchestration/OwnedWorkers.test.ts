@@ -593,6 +593,111 @@ describe("OwnedWorkers", () => {
     }).pipe(Effect.provide(testLayer())),
   );
 
+  it.effect.each(["approval", "user-input"] as const)(
+    "keeps failed startup waiting until its durable %s request resolves",
+    (requestKind) =>
+      Effect.gen(function* () {
+        yield* setup;
+        const { workerThreadId } = yield* spawn(`failed-pending-${requestKind}`);
+        const engine = yield* OrchestrationEngineService;
+        const workers = yield* OwnedWorkers.OwnedWorkers;
+        const snapshots = yield* ProjectionSnapshotQuery;
+        const requestId = `failed-pending-${requestKind}:request`;
+        const activity = (phase: "requested" | "resolved") =>
+          engine.dispatch({
+            type: "thread.activity.append",
+            commandId: CommandId.make(`${requestId}:${phase}`),
+            threadId: workerThreadId,
+            createdAt: NOW,
+            activity: {
+              id: EventId.make(`${requestId}:${phase}`),
+              kind: `${requestKind}.${phase}`,
+              summary: phase === "requested" ? "Input needed" : "Input resolved",
+              tone: requestKind === "approval" ? "approval" : "info",
+              turnId: null,
+              createdAt: NOW,
+              payload: {
+                requestId,
+                requestKind: "command",
+                ...(phase === "requested"
+                  ? {
+                      questions: [
+                        { id: "question", header: "Question", question: "Proceed?", options: [] },
+                      ],
+                    }
+                  : { decision: "approved" }),
+              },
+            },
+          });
+        yield* activity("requested");
+        yield* session(workerThreadId, "error", null, `${requestId}:session-error`);
+        expect((yield* workers.get({ callerThreadId: ROOT, workerThreadId })).worker.status).toBe(
+          "waiting",
+        );
+        expect(
+          (yield* snapshots.getWorkerState(workerThreadId)).pipe(Option.getOrThrow)
+            .pendingMessageId,
+        ).toBeNull();
+        const subscribed = yield* Deferred.make<void>();
+        const checked = yield* Deferred.make<void>();
+        const closed = yield* Ref.make(0);
+        const observed = Context.get(
+          yield* Layer.build(observedWorkers(subscribed, closed)).pipe(
+            Effect.provideService(ProjectionSnapshotQuery, {
+              ...snapshots,
+              getWorkerState: (id) =>
+                snapshots
+                  .getWorkerState(id)
+                  .pipe(
+                    Effect.tap((state) =>
+                      id === workerThreadId &&
+                      Option.isSome(state) &&
+                      state.value.thread.session?.status === "error"
+                        ? Deferred.succeed(checked, undefined)
+                        : Effect.void,
+                    ),
+                  ),
+            }),
+          ),
+          OwnedWorkers.OwnedWorkers,
+        );
+        const settled = yield* Ref.make(false);
+        const waiting = yield* observed
+          .wait({
+            callerThreadId: ROOT,
+            workerThreadIds: [workerThreadId],
+            mode: "all",
+            timeoutMs: 10_000,
+          })
+          .pipe(
+            Effect.tap(() => Ref.set(settled, true)),
+            Effect.forkChild,
+          );
+        yield* Deferred.await(subscribed);
+        yield* Deferred.await(checked);
+        expect(yield* Ref.get(settled)).toBe(false);
+        expect(yield* Ref.get(closed)).toBe(0);
+        expect(
+          (yield* workers
+            .send({
+              commandId: CommandId.make(`${requestId}:send`),
+              callerThreadId: ROOT,
+              workerThreadId,
+              text: "Continue",
+            })
+            .pipe(Effect.flip)).code,
+        ).toBe("busy");
+        yield* activity("resolved");
+        const result = yield* Fiber.join(waiting);
+        expect(result.timedOut).toBe(false);
+        expect(result.workers[0]?.status).toBe("failed");
+        expect((yield* workers.get({ callerThreadId: ROOT, workerThreadId })).worker.status).toBe(
+          "failed",
+        );
+        expect(yield* Ref.get(closed)).toBe(1);
+      }).pipe(Effect.provide(testLayer())),
+  );
+
   it.effect("reports approval and input blocked work as waiting, not completed", () =>
     Effect.gen(function* () {
       yield* setup;
@@ -943,6 +1048,7 @@ describe("OwnedWorkers", () => {
           Effect.gen(function* () {
             const provider = ProviderService.of({
               startSession: () => Effect.die("Unexpected provider start"),
+              startDiagnosticSession: () => Effect.die("Unexpected diagnostic provider start"),
               sendTurn: () => Effect.die("Unexpected provider turn"),
               compactThread: () => Effect.die("Unexpected provider compact"),
               interruptTurn: () => Effect.die("Unexpected provider interrupt"),

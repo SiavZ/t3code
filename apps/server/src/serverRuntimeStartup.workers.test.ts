@@ -117,6 +117,7 @@ it.effect(
         const stopped = yield* Deferred.make<void>();
         const native = {
           startSession: () => Effect.die("must not resume"),
+          startDiagnosticSession: () => Effect.die("must not diagnose"),
           sendTurn: () => Effect.die("must not send"),
           compactThread: () => Effect.die("unused"),
           interruptTurn: () => Effect.die("unused"),

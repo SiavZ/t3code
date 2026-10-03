@@ -46,6 +46,7 @@ import { ProjectionThreadProposedPlanRepositoryLive } from "../../persistence/La
 import { OrchestrationEngineService } from "../Services/OrchestrationEngine.ts";
 import { ThreadBackgroundLivenessService } from "../ThreadBackgroundLiveness.ts";
 import { ThreadPlanProgressService } from "../ThreadPlanProgress.ts";
+import { SharedWorkspaceActivity } from "../../workspace/SharedWorkspaceActivity.ts";
 import { ProjectionSnapshotQuery } from "../Services/ProjectionSnapshotQuery.ts";
 import {
   ProviderRuntimeIngestionService,
@@ -1046,6 +1047,7 @@ const make = Effect.gen(function* () {
   const crypto = yield* Crypto.Crypto;
   const orchestrationEngine = yield* OrchestrationEngineService;
   const projectionSnapshotQuery = yield* ProjectionSnapshotQuery;
+  const sharedWorkspaceActivity = yield* Effect.serviceOption(SharedWorkspaceActivity);
   const providerService = yield* ProviderService;
   const projectionThreadMessages = yield* ProjectionThreadMessageRepository;
   const projectionThreadProposedPlans = yield* ProjectionThreadProposedPlanRepository;
@@ -1792,6 +1794,24 @@ const make = Effect.gen(function* () {
 
       const thread = yield* resolveThreadRuntimeContext(event.threadId);
       if (!thread) return;
+      // Native callbacks carry their creation epoch. A same-thread replacement
+      // must not give late events the new runtime's authority.
+      if (
+        thread.runtimeHandoff?.status === "pending" ||
+        thread.runtimeEpochId !== event.runtimeEpochId
+      )
+        return;
+
+      if (Option.isSome(sharedWorkspaceActivity)) {
+        yield* sharedWorkspaceActivity.value.record(event).pipe(
+          Effect.catch((cause) =>
+            Effect.logWarning("Shared workspace activity recording failed", {
+              threadId: event.threadId,
+              cause,
+            }),
+          ),
+        );
+      }
 
       const now = event.createdAt;
       const eventTurnId = toTurnId(event.turnId);

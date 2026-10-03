@@ -1,3 +1,4 @@
+import { RuntimeThreadMetadata, CoordinationMailbox } from "@t3tools/contracts";
 import {
   ApprovalRequestId,
   isImportedAgentSessionMessageId,
@@ -74,6 +75,7 @@ export const ORCHESTRATION_PROJECTOR_NAMES = {
   threadTurns: "projection.thread-turns",
   checkpoints: "projection.checkpoints",
   pendingApprovals: "projection.pending-approvals",
+  coordination: "projection.coordination",
 } as const;
 
 type ProjectorName =
@@ -630,6 +632,105 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
                   },
             updatedAt: event.payload.createdAt,
           });
+          return;
+        }
+        case "thread.runtime-handoff-requested": {
+          const rows = yield* sql<{
+            metadata_json: string;
+          }>`SELECT metadata_json FROM projection_runtime_metadata WHERE thread_id=${event.payload.threadId}`.pipe(
+            Effect.mapError(toPersistenceSqlError("runtime metadata projection")),
+          );
+          const metadata = {
+            ...(rows[0]
+              ? yield* Schema.decodeUnknownEffect(Schema.fromJsonString(RuntimeThreadMetadata))(
+                  rows[0].metadata_json,
+                ).pipe(Effect.mapError(toPersistenceSqlError("runtime metadata decode")))
+              : {}),
+            runtimeHandoff: event.payload.handoff,
+          };
+          yield* sql`INSERT INTO projection_runtime_metadata VALUES(${event.payload.threadId},${JSON.stringify(metadata)}) ON CONFLICT(thread_id) DO UPDATE SET metadata_json=excluded.metadata_json`.pipe(
+            Effect.mapError(toPersistenceSqlError("runtime metadata projection")),
+          );
+          const row = yield* projectionThreadRepository.getById({
+            threadId: event.payload.threadId,
+          });
+          if (Option.isSome(row))
+            yield* projectionThreadRepository.upsert({
+              ...row.value,
+              updatedAt: event.payload.updatedAt,
+            });
+          return;
+        }
+        case "thread.runtime-handoff-failed": {
+          const rows = yield* sql<{
+            metadata_json: string;
+          }>`SELECT metadata_json FROM projection_runtime_metadata WHERE thread_id=${event.payload.threadId}`.pipe(
+            Effect.mapError(toPersistenceSqlError("runtime metadata projection")),
+          );
+          const previous = rows[0]
+            ? yield* Schema.decodeUnknownEffect(Schema.fromJsonString(RuntimeThreadMetadata))(
+                rows[0].metadata_json,
+              ).pipe(Effect.mapError(toPersistenceSqlError("runtime metadata decode")))
+            : {};
+          if (previous.runtimeHandoff?.epochId === event.payload.epochId) {
+            yield* sql`UPDATE projection_runtime_metadata SET metadata_json=${JSON.stringify({ ...previous, runtimeHandoff: { ...previous.runtimeHandoff, status: "failed" } })} WHERE thread_id=${event.payload.threadId}`.pipe(
+              Effect.mapError(toPersistenceSqlError("runtime metadata projection")),
+            );
+          }
+          const row = yield* projectionThreadRepository.getById({
+            threadId: event.payload.threadId,
+          });
+          if (Option.isSome(row))
+            yield* projectionThreadRepository.upsert({
+              ...row.value,
+              updatedAt: event.payload.updatedAt,
+            });
+          return;
+        }
+        case "thread.runtime-handoff-committed": {
+          const rows = yield* sql<{
+            metadata_json: string;
+          }>`SELECT metadata_json FROM projection_runtime_metadata WHERE thread_id=${event.payload.threadId}`.pipe(
+            Effect.mapError(toPersistenceSqlError("runtime metadata projection")),
+          );
+          const previous = rows[0]
+            ? yield* Schema.decodeUnknownEffect(Schema.fromJsonString(RuntimeThreadMetadata))(
+                rows[0].metadata_json,
+              ).pipe(Effect.mapError(toPersistenceSqlError("runtime metadata decode")))
+            : {};
+          const metadata = {
+            ...previous,
+            runtimeEpochId: event.payload.epochId,
+            runtimeHandoff: previous.runtimeHandoff
+              ? { ...previous.runtimeHandoff, status: "committed" }
+              : null,
+          };
+          yield* sql`INSERT INTO projection_runtime_metadata VALUES(${event.payload.threadId},${JSON.stringify(metadata)}) ON CONFLICT(thread_id) DO UPDATE SET metadata_json=excluded.metadata_json`.pipe(
+            Effect.mapError(toPersistenceSqlError("runtime metadata projection")),
+          );
+          const row = yield* projectionThreadRepository.getById({
+            threadId: event.payload.threadId,
+          });
+          if (Option.isSome(row))
+            yield* projectionThreadRepository.upsert({
+              ...row.value,
+              modelSelection: event.payload.targetModelSelection,
+              updatedAt: event.payload.updatedAt,
+            });
+          return;
+        }
+        case "thread.runtime-forked": {
+          const metadata = {
+            runtimeEpochId: `fork:${event.payload.threadId}`,
+            forkProvenance: {
+              sourceThreadId: event.payload.sourceThreadId,
+              throughMessageId: event.payload.throughMessageId,
+              sourceMessageIds: event.payload.sourceMessageIds,
+            },
+          };
+          yield* sql`INSERT INTO projection_runtime_metadata VALUES(${event.payload.threadId},${JSON.stringify(metadata)}) ON CONFLICT(thread_id) DO UPDATE SET metadata_json=excluded.metadata_json`.pipe(
+            Effect.mapError(toPersistenceSqlError("runtime metadata projection")),
+          );
           return;
         }
         case "thread.created":
@@ -1382,7 +1483,7 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
     const applyThreadSessionsProjection: ProjectorDefinition["apply"] = Effect.fn(
       "applyThreadSessionsProjection",
     )(function* (event, _attachmentSideEffects) {
-      if (event.type === "thread.created") {
+      if (event.type === "thread.created" || event.type === "thread.runtime-handoff-committed") {
         yield* projectionThreadSessionRepository.deleteByThreadId({
           threadId: event.payload.threadId,
         });
@@ -1406,12 +1507,36 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
     const applyThreadTurnsProjection: ProjectorDefinition["apply"] = Effect.fn(
       "applyThreadTurnsProjection",
     )(function* (event, _attachmentSideEffects) {
+      if (
+        (event.type === "thread.turn-interrupt-requested" ||
+          event.type === "thread.session-stop-requested") &&
+        event.payload.expectedMessageId !== undefined
+      ) {
+        yield* sql`INSERT INTO projection_turn_cancellations (thread_id, message_id, event_sequence, expected_turn_id)
+          VALUES (${event.payload.threadId}, ${event.payload.expectedMessageId}, ${event.sequence}, ${event.payload.expectedTurnId ?? null})
+          ON CONFLICT(thread_id, message_id) DO UPDATE SET event_sequence = excluded.event_sequence,
+            expected_turn_id = excluded.expected_turn_id`.pipe(
+          Effect.mapError(toPersistenceSqlError("ProjectionPipeline.cancelTurn")),
+        );
+        const pending = yield* projectionTurnRepository.getPendingTurnStartByThreadId({
+          threadId: event.payload.threadId,
+        });
+        if (Option.isSome(pending) && pending.value.messageId === event.payload.expectedMessageId) {
+          yield* projectionTurnRepository.deletePendingTurnStartByThreadId({
+            threadId: event.payload.threadId,
+          });
+        }
+      }
       switch (event.type) {
         case "thread.session-stop-requested": {
           const thread = yield* projectionThreadRepository.getById({
             threadId: event.payload.threadId,
           });
-          if (Option.isSome(thread) && thread.value.worker) {
+          if (
+            Option.isSome(thread) &&
+            thread.value.worker &&
+            event.payload.expectedMessageId === undefined
+          ) {
             yield* projectionTurnRepository.deletePendingTurnStartByThreadId({
               threadId: event.payload.threadId,
             });
@@ -1425,6 +1550,12 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
           return;
 
         case "thread.turn-start-requested": {
+          yield* sql`INSERT INTO projection_thread_activation_authorities (thread_id, message_id, event_sequence, authority_json)
+            VALUES (${event.payload.threadId}, ${event.payload.messageId}, ${event.sequence}, ${event.payload.unattendedAuthority === undefined ? null : JSON.stringify(event.payload.unattendedAuthority)})
+            ON CONFLICT(thread_id) DO UPDATE SET message_id = excluded.message_id, event_sequence = excluded.event_sequence,
+              authority_json = excluded.authority_json`.pipe(
+            Effect.mapError(toPersistenceSqlError("ProjectionPipeline.activationAuthority")),
+          );
           const pendingTurnStart = yield* projectionTurnRepository.getPendingTurnStartByThreadId({
             threadId: event.payload.threadId,
           });
@@ -1990,6 +2121,76 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
     });
 
     const projectors: ReadonlyArray<ProjectorDefinition> = [
+      {
+        name: ORCHESTRATION_PROJECTOR_NAMES.coordination,
+        apply: Effect.fn("applyCoordinationProjection")(function* (event) {
+          if (event.type === "thread.deleted") {
+            const thread = yield* projectionThreadRepository.getById({
+              threadId: event.payload.threadId,
+            });
+            yield* sql`DELETE FROM projection_coordination_plans WHERE root_thread_id = ${event.payload.threadId}`.pipe(
+              Effect.mapError(toPersistenceSqlError("coordination root deletion")),
+            );
+            yield* sql`DELETE FROM projection_coordination_mailboxes WHERE root_thread_id = ${event.payload.threadId}`.pipe(
+              Effect.mapError(toPersistenceSqlError("coordination mailbox deletion")),
+            );
+            yield* sql`DELETE FROM projection_thread_activation_authorities WHERE thread_id = ${event.payload.threadId}`.pipe(
+              Effect.mapError(toPersistenceSqlError("activation authority deletion")),
+            );
+            const rootId = Option.isSome(thread) ? thread.value.worker?.rootThreadId : undefined;
+            if (rootId !== undefined) {
+              const rows = yield* sql<{
+                document_json: string;
+              }>`SELECT document_json FROM projection_coordination_mailboxes WHERE root_thread_id = ${rootId}`.pipe(
+                Effect.mapError(toPersistenceSqlError("coordination recipient deletion")),
+              );
+              if (rows[0]) {
+                const mailbox = yield* Schema.decodeUnknownEffect(
+                  Schema.fromJsonString(CoordinationMailbox),
+                )(rows[0].document_json).pipe(
+                  Effect.mapError(toPersistenceSqlError("coordination mailbox decode")),
+                );
+                const next = {
+                  ...mailbox,
+                  revision: mailbox.revision + 1,
+                  envelopes: mailbox.envelopes.map((envelope) =>
+                    envelope.recipientThreadId === event.payload.threadId &&
+                    envelope.delivery === "pending"
+                      ? { ...envelope, delivery: "cancelled" as const }
+                      : envelope,
+                  ),
+                  channels: mailbox.channels.map((channel) => ({
+                    ...channel,
+                    members: channel.members.filter((id) => id !== event.payload.threadId),
+                  })),
+                };
+                yield* sql`UPDATE projection_coordination_mailboxes SET revision = ${next.revision}, document_json = ${JSON.stringify(next)} WHERE root_thread_id = ${rootId}`.pipe(
+                  Effect.mapError(toPersistenceSqlError("coordination recipient deletion")),
+                );
+              }
+            }
+            return;
+          }
+          if (event.type === "coordination.mailbox.updated") {
+            const mailbox = event.payload.mailbox;
+            yield* sql`INSERT INTO projection_coordination_mailboxes (root_thread_id, revision, document_json)
+              VALUES (${mailbox.rootThreadId}, ${mailbox.revision}, ${JSON.stringify(mailbox)})
+              ON CONFLICT(root_thread_id) DO UPDATE SET revision = excluded.revision, document_json = excluded.document_json
+              WHERE excluded.revision > projection_coordination_mailboxes.revision`.pipe(
+              Effect.mapError(toPersistenceSqlError("coordination mailbox projection")),
+            );
+            return;
+          }
+          if (event.type !== "coordination.plan.updated") return;
+          const plan = event.payload.plan;
+          yield* sql`INSERT INTO projection_coordination_plans (plan_id, root_thread_id, revision, document_json)
+            VALUES (${plan.id}, ${plan.rootThreadId}, ${plan.revision}, ${JSON.stringify(plan)})
+            ON CONFLICT(plan_id) DO UPDATE SET revision = excluded.revision, document_json = excluded.document_json
+            WHERE excluded.revision > projection_coordination_plans.revision`.pipe(
+            Effect.mapError(toPersistenceSqlError("coordination projection")),
+          );
+        }),
+      },
       {
         name: ORCHESTRATION_PROJECTOR_NAMES.projects,
         apply: applyProjectsProjection,

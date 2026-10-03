@@ -61,6 +61,12 @@ import { VcsStatusBroadcaster } from "../vcs/VcsStatusBroadcaster.ts";
 import * as RepositoryIdentityResolver from "./RepositoryIdentityResolver.ts";
 import { importRecentAgentThreads } from "./AgentSessionImporter.ts";
 import * as AgentSessionScanner from "./AgentSessionScanner.ts";
+import * as RuntimeOperations from "../orchestration/ThreadRuntimeService.ts";
+import { ProviderService } from "../provider/Services/ProviderService.ts";
+import * as DiagnosticRunner from "../provider/ProviderDiagnosticRunner.ts";
+import * as Doctor from "../provider/ProviderDoctor.ts";
+import * as Approvals from "../integrations/WorkflowApprovals.ts";
+import { providerDoctorApprovalReview } from "../../../../packages/contracts/src/runtimeOperations.ts";
 
 const PROJECT_ID = ProjectId.make("project-1");
 const WORKSPACE_ROOT = "/tmp/project-from-server";
@@ -559,7 +565,7 @@ const integrationServerConfig = ServerConfig.layerTest(process.cwd(), {
   prefix: "t3-agent-session-importer-test-",
 });
 const integrationRuntimeRepository = ProviderSessionRuntime.layer.pipe(
-  Layer.provide(SqlitePersistenceMemory),
+  Layer.provideMerge(SqlitePersistenceMemory),
 );
 const integrationLayer = Layer.mergeAll(
   OrchestrationEngineLive.pipe(
@@ -576,12 +582,336 @@ const integrationLayer = Layer.mergeAll(
   Layer.provide(OrchestrationEventStoreLive),
   Layer.provide(OrchestrationCommandReceiptRepositoryLive),
   Layer.provide(RepositoryIdentityResolver.layer),
-  Layer.provide(SqlitePersistenceMemory),
+  Layer.provideMerge(SqlitePersistenceMemory),
   Layer.provideMerge(integrationServerConfig),
   Layer.provideMerge(NodeServices.layer),
 );
 
 it.layer(integrationLayer)("AgentSessionImporter integration", (it) => {
+  it.effect(
+    "disposable doctor completes a real routed test-adapter turn and removes only its own binding",
+    () =>
+      Effect.gen(function* () {
+        const directory = yield* ProviderSessionDirectory.ProviderSessionDirectory;
+        const snapshots = yield* ProjectionSnapshotQuery.ProjectionSnapshotQuery;
+        const fs = yield* FileSystem.FileSystem;
+        const harness = yield* makeTestProviderAdapterHarness({
+          provider: ProviderDriverKind.make("codex"),
+        });
+        yield* harness.queueTurnResponseForNextSession({ events: [] });
+        const startSession = vi.fn(harness.adapter.startSession);
+        const stopSession = vi.fn(harness.adapter.stopSession);
+        const sending = yield* Deferred.make<void>();
+        const release = yield* Deferred.make<void>();
+        const cancelSending = yield* Deferred.make<void>();
+        const holdCancelled = yield* Deferred.make<void>();
+        let sends = 0;
+        const sendTurn: typeof harness.adapter.sendTurn = (input) =>
+          Effect.gen(function* () {
+            sends++;
+            if (sends === 1) {
+              yield* Deferred.succeed(sending, undefined);
+              yield* Deferred.await(release);
+            } else {
+              yield* Deferred.succeed(cancelSending, undefined);
+              yield* Deferred.await(holdCancelled);
+            }
+            return yield* harness.adapter.sendTurn(input);
+          });
+        const providerLayer = makeProviderServiceLive().pipe(
+          Layer.provide(
+            Layer.succeed(
+              ProviderAdapterRegistry,
+              makeAdapterRegistryMock({
+                [harness.provider]: { ...harness.adapter, startSession, stopSession, sendTurn },
+              }),
+            ),
+          ),
+          Layer.provide(
+            Layer.succeed(ProviderSessionDirectory.ProviderSessionDirectory, directory),
+          ),
+          Layer.provide(Layer.succeed(ProjectionSnapshotQuery.ProjectionSnapshotQuery, snapshots)),
+          Layer.provide(Layer.succeed(ProviderEventLoggers, NoOpProviderEventLoggers)),
+          Layer.provide(AnalyticsService.layerTest),
+          Layer.provide(ServerSettingsService.layerTest()),
+        );
+        const stages = yield* Effect.gen(function* () {
+          const doctor = yield* Doctor.ProviderDoctor;
+          const approvals = yield* Approvals.WorkflowApprovals;
+          const input = {
+            instanceId: "codex",
+            runId: "consented-fixture",
+            tier: "full" as const,
+            model: "gpt-5",
+          };
+          expect(
+            (yield* doctor.run(input, { trustedOperator: false }).pipe(Effect.result))._tag,
+          ).toBe("Failure");
+          expect(startSession).not.toHaveBeenCalled();
+          const reviewed = providerDoctorApprovalReview(input);
+          const approvalId = yield* approvals.grant({ ...reviewed, humanSessionId: "operator" });
+          const approved = { input, approvalId };
+          const human = { humanSessionId: "operator" };
+          expect(
+            (yield* doctor.runApproved(approved, { humanSessionId: "foreign" }).pipe(Effect.result))
+              ._tag,
+          ).toBe("Failure");
+          expect(
+            (yield* doctor
+              .runApproved({ ...approved, input: { ...input, model: "different" } }, human)
+              .pipe(Effect.result))._tag,
+          ).toBe("Failure");
+          expect(startSession).not.toHaveBeenCalled();
+          const running = yield* doctor.runApproved(approved, human).pipe(Effect.forkScoped);
+          yield* Deferred.await(sending).pipe(
+            Effect.raceFirst(
+              Fiber.join(running).pipe(
+                Effect.flatMap(() =>
+                  Effect.die("Diagnostic completed before reaching the native send receipt."),
+                ),
+              ),
+            ),
+          );
+          const reserved = yield* doctor.runApproved(approved, human);
+          expect(reserved.stages.find((stage) => stage.name === "inference")?.status).toBe(
+            "unavailable",
+          );
+          expect(startSession).toHaveBeenCalledTimes(1);
+          yield* Deferred.succeed(release, undefined);
+          const completed = yield* Fiber.join(running);
+          expect(yield* doctor.runApproved(approved, human)).toEqual(completed);
+          yield* doctor.remove(input.runId, { trustedOperator: true });
+          expect(yield* doctor.get(input.runId)).toBeNull();
+          expect((yield* doctor.runApproved(approved, human).pipe(Effect.result))._tag).toBe(
+            "Failure",
+          );
+          expect(startSession).toHaveBeenCalledTimes(1);
+          yield* harness.queueTurnResponseForNextSession({ events: [] });
+          const cancelledInput = { ...input, runId: "cancelled-fixture" };
+          const cancelledApproval = yield* approvals.grant({
+            ...providerDoctorApprovalReview(cancelledInput),
+            humanSessionId: "operator",
+          });
+          const cancelling = yield* doctor
+            .runApproved({ input: cancelledInput, approvalId: cancelledApproval }, human)
+            .pipe(Effect.forkScoped);
+          yield* Deferred.await(cancelSending).pipe(
+            Effect.raceFirst(
+              Fiber.join(cancelling).pipe(
+                Effect.flatMap(() => Effect.die("Cancelled diagnostic completed before dispatch.")),
+              ),
+            ),
+          );
+          expect(
+            (yield* doctor
+              .cancel(cancelledInput.runId, { humanSessionId: "foreign" })
+              .pipe(Effect.result))._tag,
+          ).toBe("Failure");
+          expect(yield* doctor.cancel(cancelledInput.runId, human)).toBe(true);
+          yield* Fiber.await(cancelling);
+          expect(yield* doctor.cancel(cancelledInput.runId, human)).toBe(false);
+          expect(harness.listActiveSessionIds()).toEqual([]);
+          const cancelledSession = startSession.mock.calls[1]?.[0];
+          expect(Option.isNone(yield* directory.getBinding(cancelledSession!.threadId))).toBe(true);
+          expect(yield* fs.exists(cancelledSession!.cwd!)).toBe(false);
+          return completed.stages;
+        }).pipe(
+          Effect.provide(
+            Doctor.layer.pipe(
+              Layer.provideMerge(Approvals.layer),
+              Layer.provide(DiagnosticRunner.layer),
+              Layer.provide(providerLayer),
+              Layer.provide(
+                makeProviderRegistryLayer([
+                  {
+                    instanceId: ProviderInstanceId.make("codex"),
+                    driver: harness.provider,
+                    enabled: true,
+                    installed: true,
+                    version: "fixture",
+                    status: "ready",
+                    auth: { status: "authenticated" },
+                    checkedAt: "2026-10-03T00:00:00.000Z",
+                    models: [],
+                    slashCommands: [],
+                    skills: [],
+                  },
+                ]),
+              ),
+            ),
+          ),
+        );
+        expect(stages.find((stage) => stage.name === "inference")?.status).toBe("passed");
+        expect(stages.find((stage) => stage.name === "cleanup")?.status).toBe("passed");
+        const started = startSession.mock.calls[0]?.[0];
+        expect(started).toMatchObject({
+          runtimeMode: "approval-required",
+          sandboxMode: "read-only",
+          approvalPolicy: "untrusted",
+        });
+        expect(started?.resumeCursor).toBeUndefined();
+        expect(stopSession).toHaveBeenCalledTimes(2);
+        expect(stopSession.mock.calls[0]?.[0]).toBe(started?.threadId);
+        expect(yield* fs.exists(started!.cwd!)).toBe(false);
+        expect(Option.isNone(yield* directory.getBinding(started!.threadId))).toBe(true);
+        expect(Option.isNone(yield* snapshots.getThreadDetailById(started!.threadId))).toBe(true);
+      }),
+  );
+  it.effect(
+    "handoff reactor waits for the owned native stop before starting a fresh epoch without a cursor",
+    () =>
+      Effect.gen(function* () {
+        const engine = yield* OrchestrationEngine.OrchestrationEngineService;
+        const snapshots = yield* ProjectionSnapshotQuery.ProjectionSnapshotQuery;
+        const directory = yield* ProviderSessionDirectory.ProviderSessionDirectory;
+        const fs = yield* FileSystem.FileSystem;
+        const cwd = yield* fs.makeTempDirectoryScoped();
+        const threadId = ThreadId.make("handoff-native-proof");
+        const projectId = ProjectId.make("handoff-native-project");
+        const modelSelection = { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5" };
+        const harness = yield* makeTestProviderAdapterHarness({
+          provider: ProviderDriverKind.make("codex"),
+        });
+        const stopping = yield* Deferred.make<void>();
+        const release = yield* Deferred.make<void>();
+        const fresh = yield* Deferred.make<void>();
+        let starts = 0;
+        const startSession = vi.fn((input: Parameters<typeof harness.adapter.startSession>[0]) =>
+          harness.adapter.startSession(input).pipe(
+            Effect.tap(() =>
+              Effect.gen(function* () {
+                starts++;
+                if (starts === 2) yield* Deferred.succeed(fresh, undefined);
+              }),
+            ),
+          ),
+        );
+        const stopSession: typeof harness.adapter.stopSession = (input) =>
+          Deferred.succeed(stopping, undefined).pipe(
+            Effect.andThen(Deferred.await(release)),
+            Effect.andThen(harness.adapter.stopSession(input)),
+          );
+        const providerLayer = makeProviderServiceLive().pipe(
+          Layer.provide(
+            Layer.succeed(
+              ProviderAdapterRegistry,
+              makeAdapterRegistryMock({
+                [harness.provider]: { ...harness.adapter, startSession, stopSession },
+              }),
+            ),
+          ),
+          Layer.provide(
+            Layer.succeed(ProviderSessionDirectory.ProviderSessionDirectory, directory),
+          ),
+          Layer.provide(Layer.succeed(ProjectionSnapshotQuery.ProjectionSnapshotQuery, snapshots)),
+          Layer.provide(Layer.succeed(ProviderEventLoggers, NoOpProviderEventLoggers)),
+          Layer.provide(AnalyticsService.layerTest),
+          Layer.provide(ServerSettingsService.layerTest()),
+        );
+        const reactorLayer = ProviderCommandReactorLive.pipe(
+          Layer.provideMerge(providerLayer),
+          Layer.provideMerge(RuntimeOperations.layer),
+          Layer.provide(
+            Layer.mock(ProviderAuthService)({
+              tryHandlePromptCommand: () => Effect.succeed(false),
+            }),
+          ),
+          Layer.provide(makeProviderRegistryLayer()),
+          Layer.provide(Layer.mock(GitWorkflowService)({})),
+          Layer.provide(Layer.mock(VcsStatusBroadcaster)({})),
+          Layer.provide(Layer.mock(TextGeneration)({})),
+          Layer.provide(Layer.mock(TerminalManager)({ closeIdle: () => Effect.void })),
+          Layer.provide(ServerSettingsService.layerTest()),
+        );
+        yield* engine.dispatch({
+          type: "project.create",
+          commandId: CommandId.make("handoff-project"),
+          projectId,
+          title: "Handoff",
+          workspaceRoot: cwd,
+          createdAt: "2026-10-03T00:00:00.000Z",
+        });
+        yield* engine.dispatch({
+          type: "thread.create",
+          commandId: CommandId.make("handoff-thread"),
+          threadId,
+          projectId,
+          title: "Handoff",
+          modelSelection,
+          runtimeMode: "full-access",
+          interactionMode: "default",
+          branch: null,
+          worktreePath: null,
+          createdAt: "2026-10-03T00:00:00.000Z",
+          historyImport: true,
+        });
+        yield* engine.dispatch({
+          type: "thread.history.import",
+          commandId: CommandId.make("handoff-history"),
+          threadId,
+          messages: [
+            {
+              messageId: MessageId.make("import:handoff-source"),
+              role: "user",
+              text: "Visible historical context",
+              createdAt: "2026-10-03T00:00:00.000Z",
+            },
+          ],
+        });
+        yield* Effect.gen(function* () {
+          const provider = yield* ProviderService;
+          const runtime = yield* RuntimeOperations.ThreadRuntimeService;
+          const reactor = yield* ProviderCommandReactor;
+          yield* provider.startSession(threadId, {
+            threadId,
+            providerInstanceId: modelSelection.instanceId,
+            modelSelection,
+            runtimeMode: "full-access",
+            cwd,
+            resumeCursor: { threadId: "old-native" },
+          });
+          yield* engine.dispatch({
+            type: "thread.session.set",
+            commandId: CommandId.make("handoff-ready"),
+            threadId,
+            session: {
+              threadId,
+              status: "ready",
+              providerName: "codex",
+              providerInstanceId: modelSelection.instanceId,
+              runtimeMode: "full-access",
+              activeTurnId: null,
+              lastError: null,
+              updatedAt: "2026-10-03T00:00:00.000Z",
+            },
+            createdAt: "2026-10-03T00:00:00.000Z",
+          });
+          yield* reactor.start();
+          const thread = Option.getOrThrow(yield* snapshots.getThreadDetailById(threadId));
+          const receipt = yield* runtime.handoff({
+            threadId,
+            expectedUpdatedAt: thread.updatedAt,
+            operationId: "native-proof",
+            targetModelSelection: modelSelection,
+          });
+          yield* Deferred.await(stopping);
+          expect(starts).toBe(1);
+          expect(
+            Option.getOrThrow(yield* snapshots.getThreadDetailById(threadId)).updatedAt,
+          ).not.toBe(thread.updatedAt);
+          expect((yield* runtime.metadata(threadId)).runtimeHandoff?.status).toBe("pending");
+          yield* Deferred.succeed(release, undefined);
+          yield* Deferred.await(fresh);
+          yield* reactor.drain;
+          expect(starts).toBe(2);
+          expect(startSession).toHaveBeenLastCalledWith(
+            expect.objectContaining({ threadId, runtimeEpochId: receipt.epochId }),
+          );
+          expect(startSession.mock.calls[1]?.[0].resumeCursor).toBeUndefined();
+          expect((yield* runtime.metadata(threadId)).runtimeHandoff?.status).toBe("committed");
+        }).pipe(Effect.provide(reactorLayer));
+      }),
+  );
   it.effect("imports once after the real engine persists an old rejected receipt", () =>
     Effect.gen(function* () {
       const engine = yield* OrchestrationEngine.OrchestrationEngineService;

@@ -8,6 +8,21 @@ import {
 import * as Schema from "effect/Schema";
 import * as Rpc from "effect/unstable/rpc/Rpc";
 import * as RpcGroup from "effect/unstable/rpc/RpcGroup";
+import * as Coordination from "./coordination.ts";
+import * as AgentSearch from "./agentSearch.ts";
+import * as HistorySearch from "./historySearch.ts";
+import * as Skills from "./skillManagement.ts";
+import * as ExternalMcp from "./externalMcp.ts";
+import * as Memory from "./memory.ts";
+import * as Quality from "./qualityRecords.ts";
+import * as Scheduled from "./scheduledWork.ts";
+import * as Jobs from "./backgroundJobs.ts";
+import * as Grants from "./unattendedGrants.ts";
+import * as Runtime from "./runtimeOperations.ts";
+import * as Hooks from "./runtimeHooks.ts";
+import * as Desktop from "./desktopAutomation.ts";
+import * as Integrations from "./integrationWorkflows.ts";
+import { ProjectId, ThreadId } from "./baseSchemas.ts";
 import {
   WorkerSpawnInput,
   WorkerListInput,
@@ -21,6 +36,17 @@ import {
   WorkerWaitResult,
   WorkerOperationError,
 } from "./workers.ts";
+import {
+  AgentDocument,
+  AgentDocumentReadInput,
+  AgentDocumentWriteInput,
+  AgentDocumentActionInput,
+  AgentDocumentWaitInput,
+  AgentDocumentAcceptedAction,
+  AgentDocumentError,
+  AgentDocumentAssetPrepareInput,
+  AgentDocumentAsset,
+} from "./agentDocuments.ts";
 import { NonNegativeInt, TrimmedNonEmptyString } from "./baseSchemas.ts";
 import {
   CodexAuthCallbackInput,
@@ -300,6 +326,116 @@ import {
 import { VcsError } from "./vcs.ts";
 
 export const WS_METHODS = {
+  integrationApprovalGrant: "integrations.approvalGrant",
+  catalogStatus: "catalog.status",
+  catalogSearch: "catalog.search",
+  catalogDetails: "catalog.details",
+  catalogSelect: "catalog.select",
+  catalogSelectOffCatalog: "catalog.selectOffCatalog",
+  catalogSelections: "catalog.selections",
+  catalogClearSelection: "catalog.clearSelection",
+  catalogSuggest: "catalog.suggest",
+  gmailStatus: "gmail.status",
+  gmailBeginConnect: "gmail.beginConnect",
+  gmailCompleteConnect: "gmail.completeConnect",
+  gmailDisconnect: "gmail.disconnect",
+  gmailSearch: "gmail.search",
+  gmailRead: "gmail.read",
+  gmailAttachment: "gmail.attachment",
+  gmailLabels: "gmail.labels",
+  gmailThreads: "gmail.threads",
+  gmailMutate: "gmail.mutate",
+  memoryGlobalRead: "memoryGlobal.read",
+  providerDoctorRunApproved: "providerDoctor.runApproved",
+  providerDoctorCancel: "providerDoctor.cancel",
+  memoryGlobalWrite: "memoryGlobal.write",
+  gmailReviewMutation: "gmail.reviewMutation",
+  remoteBuildStatus: "remoteBuild.status",
+  remoteBuildPrepare: "remoteBuild.prepare",
+  remoteBuildDiscard: "remoteBuild.discard",
+  remoteBuildSubmit: "remoteBuild.submit",
+  imagesStatus: "images.status",
+  imagesCreate: "images.create",
+  imagesDelete: "images.delete",
+  runtimeHandoff: "runtime.handoff",
+  runtimeFork: "runtime.fork",
+  runtimeHooksList: "runtimeHooks.list",
+  runtimeHooksConfigure: "runtimeHooks.configure",
+  runtimeHooksRemove: "runtimeHooks.remove",
+  providerDoctorRun: "providerDoctor.run",
+  providerDoctorGet: "providerDoctor.get",
+  providerDoctorRemove: "providerDoctor.remove",
+  qualitySubscribeChanges: "quality.subscribeChanges",
+  agentDocumentsPrepareAsset: "agentDocuments.prepareAsset",
+  ambientConfigure: "ambient.configure",
+  ambientGet: "ambient.get",
+  ambientStop: "ambient.stop",
+  scheduledCreate: "scheduled.create",
+  scheduledList: "scheduled.list",
+  scheduledGet: "scheduled.get",
+  scheduledCancel: "scheduled.cancel",
+  unattendedGrantCreate: "unattendedGrants.create",
+  unattendedGrantList: "unattendedGrants.list",
+  unattendedGrantRevoke: "unattendedGrants.revoke",
+  backgroundJobStart: "backgroundJobs.start",
+  backgroundJobList: "backgroundJobs.list",
+  backgroundJobGet: "backgroundJobs.get",
+  backgroundJobOutput: "backgroundJobs.output",
+  backgroundJobCancel: "backgroundJobs.cancel",
+  backgroundJobWait: "backgroundJobs.wait",
+  backgroundJobSubscribe: "backgroundJobs.subscribe",
+  backgroundJobCleanup: "backgroundJobs.cleanup",
+  memoryRemember: "memory.remember",
+  memoryRecall: "memory.recall",
+  memorySearch: "memory.search",
+  memoryForget: "memory.forget",
+  memoryTag: "memory.tag",
+  memoryLink: "memory.link",
+  memoryRelated: "memory.related",
+  qualityRead: "quality.read",
+  qualityUpdate: "quality.update",
+  sourceDevelopmentConfigure: "sourceDevelopment.configure",
+  sourceDevelopmentBuild: "sourceDevelopment.build",
+  sourceDevelopmentStatus: "sourceDevelopment.status",
+  sourceDevelopmentWait: "sourceDevelopment.wait",
+  sourceDevelopmentCancel: "sourceDevelopment.cancel",
+  sourceDevelopmentReload: "sourceDevelopment.requestReload",
+  desktopConnect: "desktopAutomation.connect",
+  desktopRespond: "desktopAutomation.respond",
+  desktopAuthorize: "desktopAutomation.authorize",
+  desktopDisconnect: "desktopAutomation.disconnect",
+  desktopHosts: "desktopAutomation.hosts",
+  desktopLease: "desktopAutomation.lease",
+  desktopRevoke: "desktopAutomation.revoke",
+  desktopInvoke: "desktopAutomation.invoke",
+  browserRun: "browserTasks.run",
+  browserGet: "browserTasks.get",
+  browserCancel: "browserTasks.cancel",
+  coordinationMailboxRead: "coordination.mailboxRead",
+  coordinationMailboxWrite: "coordination.mailboxWrite",
+  coordinationRead: "coordination.read",
+  coordinationWrite: "coordination.write",
+  agentSearch: "agentSearch.search",
+  historySearch: "history.search",
+  historyRead: "history.read",
+  historyImport: "history.import",
+  skillsList: "skills.list",
+  skillsRead: "skills.read",
+  skillsLoad: "skills.load",
+  skillsReload: "skills.reload",
+  externalMcpConfigure: "externalMcp.configure",
+  externalMcpList: "externalMcp.list",
+  externalMcpConnect: "externalMcp.connect",
+  externalMcpDisconnect: "externalMcp.disconnect",
+  externalMcpReload: "externalMcp.reload",
+  externalMcpRemove: "externalMcp.remove",
+  externalMcpSearch: "externalMcp.search",
+  externalMcpCall: "externalMcp.call",
+  externalMcpCancel: "externalMcp.cancel",
+  agentDocumentsRead: "agentDocuments.read",
+  agentDocumentsWrite: "agentDocuments.write",
+  agentDocumentsAction: "agentDocuments.action",
+  agentDocumentsWait: "agentDocuments.wait",
   workersSpawn: "workers.spawn",
   workersList: "workers.list",
   workersGet: "workers.get",
@@ -1500,7 +1636,580 @@ const WsWorkersWaitRpc = Rpc.make(WS_METHODS.workersWait, {
   error: workerRpcError,
 });
 
-export const WsRpcGroup = RpcGroup.make(
+const WsAgentDocumentsReadRpc = Rpc.make(WS_METHODS.agentDocumentsRead, {
+  payload: AgentDocumentReadInput,
+  success: Schema.Array(AgentDocument),
+  error: Schema.Union([AgentDocumentError, EnvironmentAuthorizationError]),
+});
+const WsAgentDocumentsWriteRpc = Rpc.make(WS_METHODS.agentDocumentsWrite, {
+  payload: AgentDocumentWriteInput,
+  success: AgentDocument,
+  error: Schema.Union([AgentDocumentError, EnvironmentAuthorizationError]),
+});
+const WsAgentDocumentsActionRpc = Rpc.make(WS_METHODS.agentDocumentsAction, {
+  payload: AgentDocumentActionInput,
+  success: Schema.Int,
+  error: Schema.Union([AgentDocumentError, EnvironmentAuthorizationError]),
+});
+const WsAgentDocumentsWaitRpc = Rpc.make(WS_METHODS.agentDocumentsWait, {
+  payload: AgentDocumentWaitInput,
+  success: Schema.Array(AgentDocumentAcceptedAction),
+  error: Schema.Union([AgentDocumentError, EnvironmentAuthorizationError]),
+});
+
+export const AgentDocumentsRpcGroup = RpcGroup.make(
+  WsAgentDocumentsReadRpc,
+  WsAgentDocumentsWriteRpc,
+  WsAgentDocumentsActionRpc,
+  WsAgentDocumentsWaitRpc,
+);
+
+export const IntegrationWorkflowRpcGroup = RpcGroup.make(
+  Rpc.make(WS_METHODS.providerDoctorRunApproved, {
+    payload: Runtime.ProviderDoctorApprovedInput,
+    success: Runtime.ProviderDoctorResult,
+    error: Schema.Union([Runtime.RuntimeOperationError, EnvironmentAuthorizationError]),
+  }),
+  Rpc.make(WS_METHODS.providerDoctorCancel, {
+    payload: Schema.Struct({ runId: TrimmedNonEmptyString }),
+    success: Schema.Boolean,
+    error: Schema.Union([Runtime.RuntimeOperationError, EnvironmentAuthorizationError]),
+  }),
+  Rpc.make(WS_METHODS.memoryGlobalRead, {
+    payload: Memory.GlobalMemoryReadInput,
+    success: Memory.MemoryResult,
+    error: Schema.Union([Memory.MemoryError, EnvironmentAuthorizationError]),
+  }),
+  Rpc.make(WS_METHODS.memoryGlobalWrite, {
+    payload: Memory.GlobalMemoryWriteInput,
+    success: Memory.MemoryMutationResult,
+    error: Schema.Union([Memory.MemoryError, EnvironmentAuthorizationError]),
+  }),
+  Rpc.make(WS_METHODS.gmailReviewMutation, {
+    payload: Integrations.GmailMutationReviewInput,
+    success: Integrations.ApprovalGrant,
+    error: Schema.Union([Integrations.IntegrationWorkflowError, EnvironmentAuthorizationError]),
+  }),
+  Rpc.make(WS_METHODS.sourceDevelopmentConfigure, {
+    payload: Runtime.SourceBuildProfile,
+    success: Schema.Void,
+    error: Schema.Union([Runtime.RuntimeOperationError, EnvironmentAuthorizationError]),
+  }),
+  Rpc.make(WS_METHODS.sourceDevelopmentBuild, {
+    payload: Runtime.SourceBuildInput,
+    success: Runtime.SourceBuildReceipt,
+    error: Schema.Union([Runtime.RuntimeOperationError, EnvironmentAuthorizationError]),
+  }),
+  Rpc.make(WS_METHODS.sourceDevelopmentStatus, {
+    payload: Schema.Struct({}),
+    success: Schema.Array(Runtime.SourceBuildReceipt),
+    error: EnvironmentAuthorizationError,
+  }),
+  Rpc.make(WS_METHODS.sourceDevelopmentWait, {
+    payload: Schema.Struct({ operationId: TrimmedNonEmptyString }),
+    success: Runtime.SourceBuildReceipt,
+    error: Schema.Union([Runtime.RuntimeOperationError, EnvironmentAuthorizationError]),
+  }),
+  Rpc.make(WS_METHODS.sourceDevelopmentCancel, {
+    payload: Schema.Struct({ operationId: TrimmedNonEmptyString }),
+    success: Runtime.SourceBuildReceipt,
+    error: Schema.Union([Runtime.RuntimeOperationError, EnvironmentAuthorizationError]),
+  }),
+  Rpc.make(WS_METHODS.sourceDevelopmentReload, {
+    payload: Schema.Struct({ operationId: TrimmedNonEmptyString }),
+    success: Schema.Void,
+    error: Schema.Union([Runtime.RuntimeOperationError, EnvironmentAuthorizationError]),
+  }),
+  Rpc.make(WS_METHODS.desktopConnect, {
+    payload: Desktop.DesktopHost,
+    success: Desktop.DesktopHostRequest,
+    stream: true,
+    error: Schema.Union([Desktop.DesktopAutomationError, EnvironmentAuthorizationError]),
+  }),
+  Rpc.make(WS_METHODS.desktopRespond, {
+    payload: Desktop.DesktopHostResponseInput,
+    success: Schema.Void,
+    error: Schema.Union([Desktop.DesktopAutomationError, EnvironmentAuthorizationError]),
+  }),
+  Rpc.make(WS_METHODS.desktopAuthorize, {
+    payload: Desktop.DesktopHostAuthorizeInput,
+    success: Schema.Boolean,
+    error: EnvironmentAuthorizationError,
+  }),
+  Rpc.make(WS_METHODS.desktopDisconnect, {
+    payload: Desktop.DesktopHostDisconnectInput,
+    success: Schema.Void,
+    error: Schema.Union([Desktop.DesktopAutomationError, EnvironmentAuthorizationError]),
+  }),
+  Rpc.make(WS_METHODS.desktopHosts, {
+    payload: Schema.Struct({}),
+    success: Schema.Array(Desktop.DesktopHost),
+    error: EnvironmentAuthorizationError,
+  }),
+  Rpc.make(WS_METHODS.desktopLease, {
+    payload: Desktop.DesktopLeaseInput,
+    success: Desktop.DesktopLease,
+    error: Schema.Union([Desktop.DesktopAutomationError, EnvironmentAuthorizationError]),
+  }),
+  Rpc.make(WS_METHODS.desktopRevoke, {
+    payload: Desktop.DesktopLeaseIdInput,
+    success: Schema.Void,
+    error: EnvironmentAuthorizationError,
+  }),
+  Rpc.make(WS_METHODS.desktopInvoke, {
+    payload: Desktop.DesktopInvokeInput,
+    success: Desktop.DesktopResult,
+    error: Schema.Union([Desktop.DesktopAutomationError, EnvironmentAuthorizationError]),
+  }),
+  Rpc.make(WS_METHODS.browserRun, {
+    payload: Schema.Struct({ ...Integrations.BrowserTaskInput.fields, threadId: ThreadId }),
+    success: Integrations.BrowserTaskRecord,
+    error: Schema.Union([Integrations.IntegrationWorkflowError, EnvironmentAuthorizationError]),
+  }),
+  Rpc.make(WS_METHODS.browserGet, {
+    payload: Schema.Struct({ ...Integrations.BrowserTaskIdInput.fields, threadId: ThreadId }),
+    success: Schema.NullOr(Integrations.BrowserTaskRecord),
+    error: Schema.Union([Integrations.IntegrationWorkflowError, EnvironmentAuthorizationError]),
+  }),
+  Rpc.make(WS_METHODS.browserCancel, {
+    payload: Schema.Struct({ ...Integrations.BrowserTaskIdInput.fields, threadId: ThreadId }),
+    success: Schema.Void,
+    error: Schema.Union([Integrations.IntegrationWorkflowError, EnvironmentAuthorizationError]),
+  }),
+  Rpc.make(WS_METHODS.integrationApprovalGrant, {
+    payload: Integrations.ApprovalGrant,
+    success: Integrations.ApprovalGrantResult,
+    error: Schema.Union([Integrations.IntegrationWorkflowError, EnvironmentAuthorizationError]),
+  }),
+  Rpc.make(WS_METHODS.catalogStatus, {
+    payload: Schema.Struct({}),
+    success: Integrations.CatalogStatus,
+    error: Schema.Union([Integrations.IntegrationWorkflowError, EnvironmentAuthorizationError]),
+  }),
+  Rpc.make(WS_METHODS.catalogSearch, {
+    payload: Integrations.CatalogSearch,
+    success: Integrations.CatalogSearchResult,
+    error: Schema.Union([Integrations.IntegrationWorkflowError, EnvironmentAuthorizationError]),
+  }),
+  Rpc.make(WS_METHODS.catalogDetails, {
+    payload: Integrations.CatalogDetailsInput,
+    success: Integrations.CatalogProduct,
+    error: Schema.Union([Integrations.IntegrationWorkflowError, EnvironmentAuthorizationError]),
+  }),
+  Rpc.make(WS_METHODS.catalogSelect, {
+    payload: Integrations.CatalogSelectInput,
+    success: Integrations.CatalogSelection,
+    error: Schema.Union([Integrations.IntegrationWorkflowError, EnvironmentAuthorizationError]),
+  }),
+  Rpc.make(WS_METHODS.catalogSelectOffCatalog, {
+    payload: Integrations.CatalogOffCatalogInput,
+    success: Integrations.CatalogSelection,
+    error: Schema.Union([Integrations.IntegrationWorkflowError, EnvironmentAuthorizationError]),
+  }),
+  Rpc.make(WS_METHODS.catalogSelections, {
+    payload: Schema.Struct({}),
+    success: Schema.Array(Integrations.CatalogSelection),
+    error: Schema.Union([Integrations.IntegrationWorkflowError, EnvironmentAuthorizationError]),
+  }),
+  Rpc.make(WS_METHODS.catalogClearSelection, {
+    payload: Integrations.SelectionIdInput,
+    success: Schema.Void,
+    error: Schema.Union([Integrations.IntegrationWorkflowError, EnvironmentAuthorizationError]),
+  }),
+  Rpc.make(WS_METHODS.catalogSuggest, {
+    payload: Integrations.CatalogSuggestInput,
+    success: Schema.Void,
+    error: Schema.Union([Integrations.IntegrationWorkflowError, EnvironmentAuthorizationError]),
+  }),
+  Rpc.make(WS_METHODS.gmailStatus, {
+    payload: Schema.Struct({}),
+    success: Integrations.GmailStatus,
+    error: Schema.Union([Integrations.IntegrationWorkflowError, EnvironmentAuthorizationError]),
+  }),
+  Rpc.make(WS_METHODS.gmailBeginConnect, {
+    payload: Integrations.GmailConnectInput,
+    success: Integrations.GmailConnectResult,
+    error: Schema.Union([Integrations.IntegrationWorkflowError, EnvironmentAuthorizationError]),
+  }),
+  Rpc.make(WS_METHODS.gmailCompleteConnect, {
+    payload: Integrations.GmailCompleteConnectInput,
+    success: Schema.Void,
+    error: Schema.Union([Integrations.IntegrationWorkflowError, EnvironmentAuthorizationError]),
+  }),
+  Rpc.make(WS_METHODS.gmailDisconnect, {
+    payload: Schema.Struct({}),
+    success: Schema.Void,
+    error: Schema.Union([Integrations.IntegrationWorkflowError, EnvironmentAuthorizationError]),
+  }),
+  Rpc.make(WS_METHODS.gmailSearch, {
+    payload: Integrations.GmailSearchInput,
+    success: Integrations.GmailResourceResult,
+    error: Schema.Union([Integrations.IntegrationWorkflowError, EnvironmentAuthorizationError]),
+  }),
+  Rpc.make(WS_METHODS.gmailRead, {
+    payload: Integrations.GmailReadInput,
+    success: Integrations.GmailMessage,
+    error: Schema.Union([Integrations.IntegrationWorkflowError, EnvironmentAuthorizationError]),
+  }),
+  Rpc.make(WS_METHODS.gmailAttachment, {
+    payload: Integrations.GmailAttachmentInput,
+    success: Integrations.GmailAttachment,
+    error: Schema.Union([Integrations.IntegrationWorkflowError, EnvironmentAuthorizationError]),
+  }),
+  Rpc.make(WS_METHODS.gmailLabels, {
+    payload: Schema.Struct({}),
+    success: Integrations.GmailResourceResult,
+    error: Schema.Union([Integrations.IntegrationWorkflowError, EnvironmentAuthorizationError]),
+  }),
+  Rpc.make(WS_METHODS.gmailThreads, {
+    payload: Integrations.GmailThreadsInput,
+    success: Integrations.GmailResourceResult,
+    error: Schema.Union([Integrations.IntegrationWorkflowError, EnvironmentAuthorizationError]),
+  }),
+  Rpc.make(WS_METHODS.gmailMutate, {
+    payload: Integrations.GmailMutationInput,
+    success: Integrations.GmailResourceResult,
+    error: Schema.Union([Integrations.IntegrationWorkflowError, EnvironmentAuthorizationError]),
+  }),
+  Rpc.make(WS_METHODS.remoteBuildStatus, {
+    payload: Schema.Struct({}),
+    success: Integrations.BuildStatus,
+    error: Schema.Union([Integrations.IntegrationWorkflowError, EnvironmentAuthorizationError]),
+  }),
+  Rpc.make(WS_METHODS.remoteBuildPrepare, {
+    payload: Integrations.BuildPrepareInput,
+    success: Integrations.BuildSnapshot,
+    error: Schema.Union([Integrations.IntegrationWorkflowError, EnvironmentAuthorizationError]),
+  }),
+  Rpc.make(WS_METHODS.remoteBuildDiscard, {
+    payload: Integrations.BuildSnapshotInput,
+    success: Schema.Void,
+    error: Schema.Union([Integrations.IntegrationWorkflowError, EnvironmentAuthorizationError]),
+  }),
+  Rpc.make(WS_METHODS.remoteBuildSubmit, {
+    payload: Integrations.BuildSubmissionInput,
+    success: Integrations.BuildResult,
+    error: Schema.Union([Integrations.IntegrationWorkflowError, EnvironmentAuthorizationError]),
+  }),
+  Rpc.make(WS_METHODS.imagesStatus, {
+    payload: Schema.Struct({}),
+    success: Integrations.ImageStatus,
+    error: Schema.Union([Integrations.IntegrationWorkflowError, EnvironmentAuthorizationError]),
+  }),
+  Rpc.make(WS_METHODS.imagesCreate, {
+    payload: Integrations.ImageGenerationInput,
+    success: Integrations.ImageAsset,
+    error: Schema.Union([Integrations.IntegrationWorkflowError, EnvironmentAuthorizationError]),
+  }),
+  Rpc.make(WS_METHODS.imagesDelete, {
+    payload: Integrations.ImageDeleteInput,
+    success: Schema.Void,
+    error: Schema.Union([Integrations.IntegrationWorkflowError, EnvironmentAuthorizationError]),
+  }),
+);
+
+// Parity tool RPCs live in their own group. One group holding every RPC exceeds the
+// compiler's instantiation depth in the server's handler layer.
+export const ParityToolsRpcGroup = RpcGroup.make(
+  Rpc.make(WS_METHODS.historyImport, {
+    payload: HistorySearch.HistoryImportInput,
+    success: HistorySearch.HistoryImportResult,
+    error: Schema.Union([Runtime.RuntimeOperationError, EnvironmentAuthorizationError]),
+  }),
+  Rpc.make(WS_METHODS.coordinationMailboxRead, {
+    payload: Coordination.CoordinationMailboxReadInput,
+    success: Coordination.CoordinationMailbox,
+    error: Schema.Union([Coordination.CoordinationError, EnvironmentAuthorizationError]),
+  }),
+  Rpc.make(WS_METHODS.coordinationMailboxWrite, {
+    payload: Coordination.CoordinationMailboxWriteInput,
+    success: Coordination.CoordinationMailbox,
+    error: Schema.Union([Coordination.CoordinationError, EnvironmentAuthorizationError]),
+  }),
+  Rpc.make(WS_METHODS.runtimeHandoff, {
+    payload: Runtime.RuntimeHandoffInput,
+    success: Runtime.RuntimeOperationReceipt,
+    error: Schema.Union([Runtime.RuntimeOperationError, EnvironmentAuthorizationError]),
+  }),
+  Rpc.make(WS_METHODS.runtimeFork, {
+    payload: Runtime.RuntimeForkInput,
+    success: Runtime.RuntimeOperationReceipt,
+    error: Schema.Union([Runtime.RuntimeOperationError, EnvironmentAuthorizationError]),
+  }),
+  Rpc.make(WS_METHODS.runtimeHooksList, {
+    payload: Schema.Struct({ projectId: ProjectId }),
+    success: Schema.Array(Hooks.RuntimeHook),
+    error: Schema.Union([Hooks.RuntimeHooksError, EnvironmentAuthorizationError]),
+  }),
+  Rpc.make(WS_METHODS.runtimeHooksConfigure, {
+    payload: Hooks.RuntimeHook,
+    success: Schema.Void,
+    error: Schema.Union([Hooks.RuntimeHooksError, EnvironmentAuthorizationError]),
+  }),
+  Rpc.make(WS_METHODS.runtimeHooksRemove, {
+    payload: Schema.Struct({ projectId: ProjectId, id: TrimmedNonEmptyString }),
+    success: Schema.Void,
+    error: Schema.Union([Hooks.RuntimeHooksError, EnvironmentAuthorizationError]),
+  }),
+  Rpc.make(WS_METHODS.providerDoctorRun, {
+    payload: Runtime.ProviderDoctorInput,
+    success: Runtime.ProviderDoctorResult,
+    error: Schema.Union([Runtime.RuntimeOperationError, EnvironmentAuthorizationError]),
+  }),
+  Rpc.make(WS_METHODS.providerDoctorGet, {
+    payload: Schema.Struct({ runId: TrimmedNonEmptyString }),
+    success: Schema.NullOr(Runtime.ProviderDoctorResult),
+    error: Schema.Union([Runtime.RuntimeOperationError, EnvironmentAuthorizationError]),
+  }),
+  Rpc.make(WS_METHODS.providerDoctorRemove, {
+    payload: Schema.Struct({ runId: TrimmedNonEmptyString }),
+    success: Schema.Void,
+    error: Schema.Union([Runtime.RuntimeOperationError, EnvironmentAuthorizationError]),
+  }),
+  Rpc.make(WS_METHODS.qualitySubscribeChanges, {
+    payload: Quality.QualityReadInput,
+    success: Quality.QualityRecordChange,
+    stream: true,
+    error: Schema.Union([Quality.QualityRecordsError, EnvironmentAuthorizationError]),
+  }),
+  Rpc.make(WS_METHODS.agentDocumentsPrepareAsset, {
+    payload: AgentDocumentAssetPrepareInput,
+    success: AgentDocumentAsset,
+    error: Schema.Union([AgentDocumentError, EnvironmentAuthorizationError]),
+  }),
+  Rpc.make(WS_METHODS.ambientConfigure, {
+    payload: Scheduled.AmbientWorkConfigureInput,
+    success: Scheduled.AmbientWorkRecord,
+    error: Schema.Union([Scheduled.ScheduledWorkError, EnvironmentAuthorizationError]),
+  }),
+  Rpc.make(WS_METHODS.ambientGet, {
+    payload: Scheduled.ScheduledWorkListInput,
+    success: Schema.NullOr(Scheduled.AmbientWorkRecord),
+    error: Schema.Union([Scheduled.ScheduledWorkError, EnvironmentAuthorizationError]),
+  }),
+  Rpc.make(WS_METHODS.ambientStop, {
+    payload: Scheduled.ScheduledWorkListInput,
+    success: Schema.NullOr(Scheduled.AmbientWorkRecord),
+    error: Schema.Union([Scheduled.ScheduledWorkError, EnvironmentAuthorizationError]),
+  }),
+  Rpc.make(WS_METHODS.scheduledCreate, {
+    payload: Scheduled.ScheduledWorkCreateInput,
+    success: Scheduled.ScheduledWorkRecord,
+    error: Schema.Union([Scheduled.ScheduledWorkError, EnvironmentAuthorizationError]),
+  }),
+  Rpc.make(WS_METHODS.scheduledList, {
+    payload: Scheduled.ScheduledWorkListInput,
+    success: Schema.Array(Scheduled.ScheduledWorkRecord),
+    error: Schema.Union([Scheduled.ScheduledWorkError, EnvironmentAuthorizationError]),
+  }),
+  Rpc.make(WS_METHODS.scheduledGet, {
+    payload: Scheduled.ScheduledWorkReadInput,
+    success: Scheduled.ScheduledWorkRecord,
+    error: Schema.Union([Scheduled.ScheduledWorkError, EnvironmentAuthorizationError]),
+  }),
+  Rpc.make(WS_METHODS.scheduledCancel, {
+    payload: Scheduled.ScheduledWorkReadInput,
+    success: Scheduled.ScheduledWorkRecord,
+    error: Schema.Union([Scheduled.ScheduledWorkError, EnvironmentAuthorizationError]),
+  }),
+  Rpc.make(WS_METHODS.unattendedGrantCreate, {
+    payload: Grants.UnattendedGrantCreateInput,
+    success: Grants.UnattendedGrant,
+    error: Schema.Union([Scheduled.ScheduledWorkError, EnvironmentAuthorizationError]),
+  }),
+  Rpc.make(WS_METHODS.unattendedGrantList, {
+    payload: Scheduled.ScheduledWorkListInput,
+    success: Schema.Array(Grants.UnattendedGrant),
+    error: Schema.Union([Scheduled.ScheduledWorkError, EnvironmentAuthorizationError]),
+  }),
+  Rpc.make(WS_METHODS.unattendedGrantRevoke, {
+    payload: Grants.UnattendedGrantReadInput,
+    success: Grants.UnattendedGrant,
+    error: Schema.Union([Scheduled.ScheduledWorkError, EnvironmentAuthorizationError]),
+  }),
+  Rpc.make(WS_METHODS.backgroundJobStart, {
+    payload: Jobs.BackgroundJobStartInput,
+    success: Jobs.BackgroundJobRecord,
+    error: Schema.Union([Jobs.BackgroundJobError, EnvironmentAuthorizationError]),
+  }),
+  Rpc.make(WS_METHODS.backgroundJobList, {
+    payload: Scheduled.ScheduledWorkListInput,
+    success: Schema.Array(Jobs.BackgroundJobRecord),
+    error: Schema.Union([Jobs.BackgroundJobError, EnvironmentAuthorizationError]),
+  }),
+  Rpc.make(WS_METHODS.backgroundJobGet, {
+    payload: Jobs.BackgroundJobReadInput,
+    success: Jobs.BackgroundJobRecord,
+    error: Schema.Union([Jobs.BackgroundJobError, EnvironmentAuthorizationError]),
+  }),
+  Rpc.make(WS_METHODS.backgroundJobOutput, {
+    payload: Jobs.BackgroundJobOutputInput,
+    success: Jobs.BackgroundJobOutput,
+    error: Schema.Union([Jobs.BackgroundJobError, EnvironmentAuthorizationError]),
+  }),
+  Rpc.make(WS_METHODS.backgroundJobCancel, {
+    payload: Jobs.BackgroundJobReadInput,
+    success: Jobs.BackgroundJobRecord,
+    error: Schema.Union([Jobs.BackgroundJobError, EnvironmentAuthorizationError]),
+  }),
+  Rpc.make(WS_METHODS.backgroundJobWait, {
+    payload: Jobs.BackgroundJobWaitInput,
+    success: Schema.Struct({ timedOut: Schema.Boolean, job: Jobs.BackgroundJobRecord }),
+    error: Schema.Union([Jobs.BackgroundJobError, EnvironmentAuthorizationError]),
+  }),
+  Rpc.make(WS_METHODS.backgroundJobSubscribe, {
+    payload: Schema.Struct({
+      ...Jobs.BackgroundJobReadInput.fields,
+      notify: Schema.Boolean,
+      wake: Schema.Boolean,
+    }),
+    success: Jobs.BackgroundJobRecord,
+    error: Schema.Union([Jobs.BackgroundJobError, EnvironmentAuthorizationError]),
+  }),
+  Rpc.make(WS_METHODS.backgroundJobCleanup, {
+    payload: Jobs.BackgroundJobReadInput,
+    success: Schema.Void,
+    error: Schema.Union([Jobs.BackgroundJobError, EnvironmentAuthorizationError]),
+  }),
+  Rpc.make(WS_METHODS.memoryRemember, {
+    payload: Schema.Struct({ projectId: ProjectId, input: Memory.MemoryRememberInput }),
+    success: Memory.MemoryMutationResult,
+    error: Schema.Union([Memory.MemoryError, EnvironmentAuthorizationError]),
+  }),
+  Rpc.make(WS_METHODS.memoryRecall, {
+    payload: Schema.Struct({ projectId: ProjectId, input: Memory.MemoryReadInput }),
+    success: Memory.MemoryResult,
+    error: Schema.Union([Memory.MemoryError, EnvironmentAuthorizationError]),
+  }),
+  Rpc.make(WS_METHODS.memorySearch, {
+    payload: Schema.Struct({ projectId: ProjectId, input: Memory.MemoryReadInput }),
+    success: Memory.MemoryResult,
+    error: Schema.Union([Memory.MemoryError, EnvironmentAuthorizationError]),
+  }),
+  Rpc.make(WS_METHODS.memoryForget, {
+    payload: Schema.Struct({ projectId: ProjectId, input: Memory.MemoryMutationInput }),
+    success: Memory.MemoryMutationResult,
+    error: Schema.Union([Memory.MemoryError, EnvironmentAuthorizationError]),
+  }),
+  Rpc.make(WS_METHODS.memoryTag, {
+    payload: Schema.Struct({ projectId: ProjectId, input: Memory.MemoryTagInput }),
+    success: Memory.MemoryMutationResult,
+    error: Schema.Union([Memory.MemoryError, EnvironmentAuthorizationError]),
+  }),
+  Rpc.make(WS_METHODS.memoryLink, {
+    payload: Schema.Struct({ projectId: ProjectId, input: Memory.MemoryLinkInput }),
+    success: Memory.MemoryMutationResult,
+    error: Schema.Union([Memory.MemoryError, EnvironmentAuthorizationError]),
+  }),
+  Rpc.make(WS_METHODS.memoryRelated, {
+    payload: Schema.Struct({ projectId: ProjectId, input: Memory.MemoryRelatedInput }),
+    success: Memory.MemoryResult,
+    error: Schema.Union([Memory.MemoryError, EnvironmentAuthorizationError]),
+  }),
+  Rpc.make(WS_METHODS.qualityRead, {
+    payload: Quality.QualityReadInput,
+    success: Schema.NullOr(Quality.QualityRecord),
+    error: Schema.Union([Quality.QualityRecordsError, EnvironmentAuthorizationError]),
+  }),
+  Rpc.make(WS_METHODS.qualityUpdate, {
+    payload: Quality.QualityUpdateInput,
+    success: Quality.QualityRecord,
+    error: Schema.Union([Quality.QualityRecordsError, EnvironmentAuthorizationError]),
+  }),
+  Rpc.make(WS_METHODS.coordinationRead, {
+    payload: Coordination.CoordinationReadInput,
+    success: Coordination.CoordinationPlan,
+    error: Schema.Union([Coordination.CoordinationError, EnvironmentAuthorizationError]),
+  }),
+  Rpc.make(WS_METHODS.coordinationWrite, {
+    payload: Coordination.CoordinationWriteInput,
+    success: Coordination.CoordinationPlan,
+    error: Schema.Union([Coordination.CoordinationError, EnvironmentAuthorizationError]),
+  }),
+  Rpc.make(WS_METHODS.agentSearch, {
+    payload: AgentSearch.AgentSearchInput,
+    success: AgentSearch.AgentSearchResult,
+    error: Schema.Union([AgentSearch.AgentSearchError, EnvironmentAuthorizationError]),
+  }),
+  Rpc.make(WS_METHODS.historySearch, {
+    payload: HistorySearch.HistorySearchInput,
+    success: HistorySearch.HistorySearchResult,
+    error: Schema.Union([HistorySearch.HistorySearchError, EnvironmentAuthorizationError]),
+  }),
+  Rpc.make(WS_METHODS.historyRead, {
+    payload: HistorySearch.HistoryReadInput,
+    success: HistorySearch.NormalizedHistorySession,
+    error: Schema.Union([HistorySearch.HistorySearchError, EnvironmentAuthorizationError]),
+  }),
+  Rpc.make(WS_METHODS.skillsList, {
+    payload: Skills.SkillListInput,
+    success: Skills.SkillListResult,
+    error: Schema.Union([Skills.SkillManagementError, EnvironmentAuthorizationError]),
+  }),
+  Rpc.make(WS_METHODS.skillsRead, {
+    payload: Skills.SkillReadInput,
+    success: Skills.SkillReadResult,
+    error: Schema.Union([Skills.SkillManagementError, EnvironmentAuthorizationError]),
+  }),
+  Rpc.make(WS_METHODS.skillsLoad, {
+    payload: Skills.SkillReadInput,
+    success: Skills.SkillReadResult,
+    error: Schema.Union([Skills.SkillManagementError, EnvironmentAuthorizationError]),
+  }),
+  Rpc.make(WS_METHODS.skillsReload, {
+    payload: Skills.SkillListInput,
+    success: Skills.SkillListResult,
+    error: Schema.Union([Skills.SkillManagementError, EnvironmentAuthorizationError]),
+  }),
+  Rpc.make(WS_METHODS.externalMcpConfigure, {
+    payload: ExternalMcp.ExternalMcpConfigureInput,
+    success: ExternalMcp.ExternalMcpSnapshot,
+    error: Schema.Union([ExternalMcp.ExternalMcpError, EnvironmentAuthorizationError]),
+  }),
+  Rpc.make(WS_METHODS.externalMcpList, {
+    payload: Schema.Struct({}),
+    success: ExternalMcp.ExternalMcpListResult,
+    error: Schema.Union([ExternalMcp.ExternalMcpError, EnvironmentAuthorizationError]),
+  }),
+  Rpc.make(WS_METHODS.externalMcpConnect, {
+    payload: ExternalMcp.ExternalMcpIdInput,
+    success: ExternalMcp.ExternalMcpSnapshot,
+    error: Schema.Union([ExternalMcp.ExternalMcpError, EnvironmentAuthorizationError]),
+  }),
+  Rpc.make(WS_METHODS.externalMcpDisconnect, {
+    payload: ExternalMcp.ExternalMcpIdInput,
+    success: ExternalMcp.ExternalMcpSnapshot,
+    error: Schema.Union([ExternalMcp.ExternalMcpError, EnvironmentAuthorizationError]),
+  }),
+  Rpc.make(WS_METHODS.externalMcpReload, {
+    payload: ExternalMcp.ExternalMcpIdInput,
+    success: ExternalMcp.ExternalMcpSnapshot,
+    error: Schema.Union([ExternalMcp.ExternalMcpError, EnvironmentAuthorizationError]),
+  }),
+  Rpc.make(WS_METHODS.externalMcpRemove, {
+    payload: ExternalMcp.ExternalMcpIdInput,
+    success: Schema.Void,
+    error: Schema.Union([ExternalMcp.ExternalMcpError, EnvironmentAuthorizationError]),
+  }),
+  Rpc.make(WS_METHODS.externalMcpSearch, {
+    payload: ExternalMcp.ExternalMcpSearchInput,
+    success: ExternalMcp.ExternalMcpSearchResult,
+    error: Schema.Union([ExternalMcp.ExternalMcpError, EnvironmentAuthorizationError]),
+  }),
+  Rpc.make(WS_METHODS.externalMcpCall, {
+    payload: ExternalMcp.ExternalMcpCallInput,
+    success: ExternalMcp.ExternalMcpCallResult,
+    error: Schema.Union([ExternalMcp.ExternalMcpError, EnvironmentAuthorizationError]),
+  }),
+  Rpc.make(WS_METHODS.externalMcpCancel, {
+    payload: ExternalMcp.ExternalMcpCancelInput,
+    success: Schema.Void,
+    error: Schema.Union([ExternalMcp.ExternalMcpError, EnvironmentAuthorizationError]),
+  }),
+);
+
+export const WsCoreRpcGroup = RpcGroup.make(
+  ...AgentDocumentsRpcGroup.requests.values(),
   WsWorkersSpawnRpc,
   WsWorkersListRpc,
   WsWorkersGetRpc,
@@ -1657,4 +2366,10 @@ export const WsRpcGroup = RpcGroup.make(
   WsOrchestrationGetArchivedShellSnapshotRpc,
   WsOrchestrationSubscribeShellRpc,
   WsOrchestrationSubscribeThreadRpc,
+);
+
+export const WsRpcGroup = RpcGroup.make(
+  ...WsCoreRpcGroup.requests.values(),
+  ...ParityToolsRpcGroup.requests.values(),
+  ...IntegrationWorkflowRpcGroup.requests.values(),
 );
