@@ -767,7 +767,8 @@ const make = Effect.gen(function* () {
       Effect.gen(function* () {
         if (
           options?.activationMessageId &&
-          (yield* activationFence.cancelled(threadId, options.activationMessageId))
+          ((yield* activationFence.cancelled(threadId, options.activationMessageId)) ||
+            !(yield* activationFence.authorized(threadId, options.activationMessageId)))
         )
           return yield* Effect.interrupt;
         return yield* providerService
@@ -1269,7 +1270,11 @@ const make = Effect.gen(function* () {
       receivedEvent.commandId !== null ? resumedTurnStarts.get(receivedEvent.commandId) : undefined;
     const event = resumed ? { ...receivedEvent, payload: resumed.event.payload } : receivedEvent;
     const key = turnStartKeyForEvent(event);
-    if (yield* activationFence.cancelled(event.payload.threadId, event.payload.messageId)) return;
+    if (
+      (yield* activationFence.cancelled(event.payload.threadId, event.payload.messageId)) ||
+      !(yield* activationFence.authorized(event.payload.threadId, event.payload.messageId))
+    )
+      return;
     if (yield* hasHandledTurnStartRecently(key)) {
       return;
     }
@@ -1581,7 +1586,10 @@ const make = Effect.gen(function* () {
     const send = withActivationOrigin(
       event,
       Effect.gen(function* () {
-        if (yield* activationFence.cancelled(event.payload.threadId, event.payload.messageId))
+        if (
+          (yield* activationFence.cancelled(event.payload.threadId, event.payload.messageId)) ||
+          !(yield* activationFence.authorized(event.payload.threadId, event.payload.messageId))
+        )
           return;
         const current = yield* resolveThreadShell(event.payload.threadId);
         if (

@@ -166,7 +166,12 @@ import * as OwnedWorkers from "./orchestration/OwnedWorkers.ts";
 import * as SharedWorkspaceActivity from "./workspace/SharedWorkspaceActivity.ts";
 import * as Memory from "./memory/Memory.ts";
 import * as QualityRecords from "./orchestration/QualityRecords.ts";
+import * as ScheduledWork from "./orchestration/ScheduledWork.ts";
+import * as ScheduledWorkActivation from "./orchestration/ScheduledWorkActivation.ts";
+import * as AmbientWork from "./orchestration/AmbientWork.ts";
 import * as UnattendedGrants from "./orchestration/UnattendedGrants.ts";
+import * as BackgroundJobs from "./background/BackgroundJobs.ts";
+import * as BackgroundJobAuthority from "./background/BackgroundJobAuthority.ts";
 import * as ProjectionSnapshotQuery from "./orchestration/Services/ProjectionSnapshotQuery.ts";
 import {
   clearPersistedServerRuntimeState,
@@ -477,6 +482,10 @@ const ProviderRuntimeLayerLive = ProviderSessionReaperLive.pipe(
   // Subscribes to `account.rate-limits.updated` so usage bars track live
   // telemetry instead of waiting for the next status probe.
   Layer.provideMerge(ProviderUsageLimitsIngestionLive),
+  Layer.provideMerge(AmbientWork.layer),
+  Layer.provideMerge(BackgroundJobs.layer.pipe(Layer.provide(BackgroundJobAuthority.layer))),
+  Layer.provideMerge(ScheduledWork.layer),
+  Layer.provideMerge(ScheduledWorkActivation.layer),
   Layer.provideMerge(UnattendedGrants.layer),
   Layer.provideMerge(OwnedWorkers.layer),
   Layer.provideMerge(Layer.mergeAll(Memory.layer, QualityRecords.layer)),

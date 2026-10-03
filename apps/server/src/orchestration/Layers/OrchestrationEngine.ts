@@ -477,10 +477,11 @@ const makeOrchestrationEngine = Effect.gen(function* () {
               })
             : undefined;
         if (
-          (currentCommand.type === "thread.turn.interrupt" ||
+          (currentCommand.type === "thread.turn.start" && currentCommand.expectedIdle) ||
+          ((currentCommand.type === "thread.turn.interrupt" ||
             currentCommand.type === "thread.session.stop") &&
-          (currentCommand.expectedMessageId !== undefined ||
-            currentCommand.expectedTurnId !== undefined)
+            (currentCommand.expectedMessageId !== undefined ||
+              currentCommand.expectedTurnId !== undefined))
         ) {
           const guarded = yield* projectionSnapshotQuery.getWorkerState(currentCommand.threadId);
           if (Option.isNone(guarded))
@@ -489,26 +490,43 @@ const makeOrchestrationEngine = Effect.gen(function* () {
               detail: "Guarded target is unavailable.",
             });
           const { thread, pendingMessageId } = guarded.value;
-          const currentRequests =
-            currentCommand.expectedMessageId === undefined
-              ? []
-              : yield* sql<{
-                  pending_message_id: string;
-                }>`SELECT pending_message_id FROM projection_turns WHERE thread_id = ${thread.id} AND turn_id = ${thread.latestTurn?.turnId ?? ""} LIMIT 1`;
-          // A queued activation supersedes the terminal turn's message identity.
-          const messageMatches =
-            currentCommand.expectedMessageId === undefined ||
-            (pendingMessageId !== null
-              ? pendingMessageId === currentCommand.expectedMessageId
-              : currentRequests[0]?.pending_message_id === currentCommand.expectedMessageId);
-          const turnMatches =
-            currentCommand.expectedTurnId === undefined ||
-            thread.latestTurn?.turnId === currentCommand.expectedTurnId;
-          if (!messageMatches || !turnMatches)
-            return yield* new CoordinationError({
-              code: "conflict",
-              detail: "Guarded cancellation no longer targets the current assignment.",
-            });
+          if (currentCommand.type === "thread.turn.start") {
+            const busy =
+              pendingMessageId !== null ||
+              thread.latestTurn?.state === "running" ||
+              thread.session?.status === "starting" ||
+              thread.session?.activeTurnId != null ||
+              thread.hasPendingApprovals ||
+              thread.hasPendingUserInput ||
+              thread.backgroundLiveness != null ||
+              threadBackgroundLiveness.getThreadBackgroundLiveness(thread.id) !== null;
+            if (busy)
+              return yield* new CoordinationError({
+                code: "busy",
+                detail: "Guarded start requires an idle target.",
+              });
+          } else {
+            const currentRequests =
+              currentCommand.expectedMessageId === undefined
+                ? []
+                : yield* sql<{
+                    pending_message_id: string;
+                  }>`SELECT pending_message_id FROM projection_turns WHERE thread_id = ${thread.id} AND turn_id = ${thread.latestTurn?.turnId ?? ""} LIMIT 1`;
+            // A queued activation supersedes the terminal turn's message identity.
+            const messageMatches =
+              currentCommand.expectedMessageId === undefined ||
+              (pendingMessageId !== null
+                ? pendingMessageId === currentCommand.expectedMessageId
+                : currentRequests[0]?.pending_message_id === currentCommand.expectedMessageId);
+            const turnMatches =
+              currentCommand.expectedTurnId === undefined ||
+              thread.latestTurn?.turnId === currentCommand.expectedTurnId;
+            if (!messageMatches || !turnMatches)
+              return yield* new CoordinationError({
+                code: "conflict",
+                detail: "Guarded cancellation no longer targets the current assignment.",
+              });
+          }
         }
         const coordinationPlan =
           currentCommand.type === "coordination.plan.write" ||

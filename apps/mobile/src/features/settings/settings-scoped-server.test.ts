@@ -80,7 +80,7 @@ describe("mobile project settings scope", () => {
       ...DEFAULT_SERVER_SETTINGS,
       agentToolCapabilities: ["quality-records"],
       projectSettingsOverrides: {
-        [firstProject]: { agentToolCapabilities: [], enableMemoryAutoRecall: true },
+        [firstProject]: { agentToolCapabilities: ["automation"], enableMemoryAutoRecall: true },
         [secondProject]: { defaultAutoPull: true },
       },
     };
@@ -97,7 +97,7 @@ describe("mobile project settings scope", () => {
         patch: {
           projectSettingsOverrides: {
             [firstProject]: {
-              agentToolCapabilities: ["memory"],
+              agentToolCapabilities: ["memory", "automation"],
               enableMemoryAutoRecall: true,
             },
             [secondProject]: {
@@ -122,7 +122,7 @@ describe("mobile project settings scope", () => {
         }),
         environment(secondId, {
           ...DEFAULT_SERVER_SETTINGS,
-          agentToolCapabilities: [],
+          agentToolCapabilities: ["automation"],
         }),
       ],
       null,
@@ -131,7 +131,7 @@ describe("mobile project settings scope", () => {
       planMobileAgentToolCapability(targets, false, "memory", false).map(
         (write) => write.patch.agentToolCapabilities,
       ),
-    ).toEqual([["quality-records"], []]);
+    ).toEqual([["quality-records"], ["automation"]]);
   });
   it("edits each checkout's own override without changing either environment default", () => {
     const firstSettings: ServerSettings = {

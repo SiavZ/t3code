@@ -8,14 +8,14 @@ import {
 describe("optional agent tool settings", () => {
   it("preserves each target's unrelated flags when enabling or disabling one tool", () => {
     const first = ["quality-records", "memory"] as const;
-    const second = ["quality-records"] as const;
+    const second = ["automation"] as const;
     expect(setOptionalAgentToolCapability(first, "memory", false)).toEqual(["quality-records"]);
     expect(setOptionalAgentToolCapability(second, "memory", true)).toEqual([
       "memory",
-      "quality-records",
+      "automation",
     ]);
     expect(first).toEqual(["quality-records", "memory"]);
-    expect(second).toEqual(["quality-records"]);
+    expect(second).toEqual(["automation"]);
   });
   it("is idempotent, deduplicated and bounded by the capability catalog", () => {
     expect(setOptionalAgentToolCapability(["memory", "memory"], "memory", true)).toEqual([
@@ -23,7 +23,7 @@ describe("optional agent tool settings", () => {
     ]);
     expect(
       setOptionalAgentToolCapability(OPTIONAL_AGENT_TOOL_CAPABILITIES, "memory", true),
-    ).toHaveLength(2);
+    ).toHaveLength(4);
     expect(setOptionalAgentToolCapability([], "memory", false)).toEqual([]);
   });
   it("disabling any capability never broadens access", () => {
@@ -33,7 +33,7 @@ describe("optional agent tool settings", () => {
         capability,
         false,
       );
-      expect(narrowed).toHaveLength(1);
+      expect(narrowed).toHaveLength(3);
       expect(narrowed).not.toContain(capability);
       expect(narrowed.every((entry) => OPTIONAL_AGENT_TOOL_CAPABILITIES.includes(entry))).toBe(
         true,

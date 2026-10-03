@@ -17,6 +17,14 @@ export const OPTIONAL_AGENT_TOOL_DETAILS: Record<
     label: "Quality records",
     description: "Record task progress and verification evidence.",
   },
+  automation: {
+    label: "Automation",
+    description: "Schedule agent work and manage unattended tasks.",
+  },
+  "background-jobs": {
+    label: "Background jobs",
+    description: "Start and manage background commands.",
+  },
 };
 
 /** Change one flag using each target's effective value, never a representative's array. */

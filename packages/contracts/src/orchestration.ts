@@ -139,7 +139,12 @@ export const RuntimeMode = Schema.Literals([
 ]);
 export type RuntimeMode = typeof RuntimeMode.Type;
 export const DEFAULT_RUNTIME_MODE: RuntimeMode = "full-access";
-export const OPTIONAL_AGENT_TOOL_CAPABILITIES = ["memory", "quality-records"] as const;
+export const OPTIONAL_AGENT_TOOL_CAPABILITIES = [
+  "memory",
+  "quality-records",
+  "automation",
+  "background-jobs",
+] as const;
 export const OptionalAgentToolCapability = Schema.Literals(OPTIONAL_AGENT_TOOL_CAPABILITIES);
 export type OptionalAgentToolCapability = typeof OptionalAgentToolCapability.Type;
 export const WorkerMcpCapability = Schema.Literals([
@@ -1364,6 +1369,7 @@ export type ThreadTurnStartBootstrap = typeof ThreadTurnStartBootstrap.Type;
 
 export const ThreadTurnStartCommand = Schema.Struct({
   unattendedAuthority: Schema.optional(ThreadUnattendedAuthority),
+  expectedIdle: Schema.optional(Schema.Literal(true)),
   type: Schema.Literal("thread.turn.start"),
   commandId: CommandId,
   threadId: ThreadId,

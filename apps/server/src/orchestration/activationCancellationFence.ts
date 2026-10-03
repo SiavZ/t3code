@@ -21,6 +21,38 @@ export const makeActivationCancellationFence = Effect.gen(function* () {
       SELECT event_sequence FROM projection_turn_cancellations
       WHERE thread_id = ${threadId} AND message_id = ${messageId}
     `.pipe(Effect.map((rows) => rows.length > 0));
+  const authorized = (threadId: ThreadId, messageId: MessageId) =>
+    Effect.gen(function* () {
+      const schedules = yield* sql<{
+        grant_id: string;
+        grant_revision: number;
+        owner_thread_id: string;
+        project_id: string;
+        cancel_requested: number;
+      }>`
+      SELECT json_extract(document_json, '$.grantId') AS grant_id,
+        json_extract(document_json, '$.grantRevision') AS grant_revision,
+        owner_thread_id, json_extract(document_json, '$.projectId') AS project_id,
+        json_extract(document_json, '$.cancelRequested') AS cancel_requested
+      FROM scheduled_work WHERE json_extract(document_json, '$.messageId') = ${messageId}
+        AND (json_extract(document_json, '$.target.threadId') = ${threadId}
+          OR json_extract(document_json, '$.executionThreadId') = ${threadId}
+          OR json_extract(document_json, '$.target.type') = 'spawn')
+    `;
+      if (schedules.length === 0) return true;
+      const schedule = schedules[0]!;
+      if (schedule.cancel_requested) return false;
+      const activations = yield* sql<{
+        message_id: string;
+      }>`SELECT message_id FROM projection_thread_activation_authorities WHERE thread_id = ${threadId}`;
+      if (activations[0]?.message_id !== messageId) return false;
+      const grants = yield* sql`
+      SELECT grant_id FROM unattended_grants WHERE grant_id = ${schedule.grant_id}
+        AND revision = ${schedule.grant_revision} AND revoked = 0
+        AND owner_thread_id = ${schedule.owner_thread_id} AND project_id = ${schedule.project_id}
+    `;
+      return grants.length > 0;
+    });
   const canCancel = (input: {
     threadId: ThreadId;
     sequence: number;
@@ -55,5 +87,5 @@ export const makeActivationCancellationFence = Effect.gen(function* () {
     `;
       return activation.length > 0;
     });
-  return { cancelled, canCancel };
+  return { cancelled, authorized, canCancel };
 });

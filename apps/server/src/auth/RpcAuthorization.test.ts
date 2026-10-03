@@ -25,6 +25,12 @@ describe("RPC authorization scopes", () => {
       WS_METHODS.memoryRelated,
       WS_METHODS.qualityRead,
       WS_METHODS.qualitySubscribeChanges,
+      WS_METHODS.scheduledList,
+      WS_METHODS.scheduledGet,
+      WS_METHODS.ambientGet,
+      WS_METHODS.backgroundJobList,
+      WS_METHODS.backgroundJobOutput,
+      WS_METHODS.backgroundJobWait,
     ])
       expect(requiredScopeForRpcMethod(method)).toBe(AuthOrchestrationReadScope);
     for (const method of [
@@ -33,6 +39,11 @@ describe("RPC authorization scopes", () => {
       WS_METHODS.memoryRemember,
       WS_METHODS.memoryForget,
       WS_METHODS.qualityUpdate,
+      WS_METHODS.scheduledCreate,
+      WS_METHODS.scheduledCancel,
+      WS_METHODS.backgroundJobStart,
+      WS_METHODS.backgroundJobCancel,
+      WS_METHODS.backgroundJobSubscribe,
     ])
       expect(requiredScopeForRpcMethod(method)).toBe(AuthOrchestrationOperateScope);
   });
@@ -41,6 +52,7 @@ describe("RPC authorization scopes", () => {
     for (const method of [
       WS_METHODS.unattendedGrantCreate,
       WS_METHODS.unattendedGrantRevoke,
+      WS_METHODS.ambientConfigure,
       WS_METHODS.memoryGlobalRead,
       WS_METHODS.memoryGlobalWrite,
     ])

@@ -34,6 +34,9 @@ import * as Scope from "effect/Scope";
 
 import * as ServerConfig from "./config.ts";
 import * as CoordinationReactor from "./orchestration/CoordinationReactor.ts";
+import * as ScheduledWork from "./orchestration/ScheduledWork.ts";
+import * as AmbientWork from "./orchestration/AmbientWork.ts";
+import * as BackgroundJobs from "./background/BackgroundJobs.ts";
 import { flushCompileCache } from "./compileCache.ts";
 import * as Keybindings from "./keybindings.ts";
 import * as ExternalLauncher from "./process/externalLauncher.ts";
@@ -961,6 +964,9 @@ export const make = (options?: StartupOptions) =>
     const projectionSnapshotQuery = yield* ProjectionSnapshotQuery.ProjectionSnapshotQuery;
     const providerSessionDirectory = yield* ProviderSessionDirectory.ProviderSessionDirectory;
     const coordinationReactor = yield* CoordinationReactor.CoordinationReactor;
+    const scheduledWork = yield* ScheduledWork.ScheduledWork;
+    const ambientWork = yield* AmbientWork.AmbientWork;
+    const backgroundJobs = yield* BackgroundJobs.BackgroundJobs;
     const crypto = yield* Crypto.Crypto;
     const launcher = yield* ServiceLauncherClient.ServiceLauncherClient;
 
@@ -1024,6 +1030,15 @@ export const make = (options?: StartupOptions) =>
       yield* runStartupPhase("workers.pending-starts.reconcile", reconcileWorkerPendingStarts);
       yield* runStartupPhase("provider-sessions.reconcile", reconcileProviderSessions);
       yield* runStartupPhase("coordination.recover", coordinationReactor.recover);
+      yield* runStartupPhase("background-jobs.reconcile", backgroundJobs.reconcile);
+      yield* runStartupPhase(
+        "scheduled-work.start",
+        scheduledWork.start.pipe(Scope.provide(reactorScope)),
+      );
+      yield* runStartupPhase(
+        "ambient-work.start",
+        ambientWork.start.pipe(Scope.provide(reactorScope)),
+      );
       yield* runStartupPhase(
         "coordination.start",
         coordinationReactor.start.pipe(Scope.provide(reactorScope)),

@@ -38,9 +38,30 @@ export const parityOperations = {
     subscribeChanges: (input: EnvironmentRpcInput<typeof WS_METHODS.qualitySubscribeChanges>) =>
       subscribe(WS_METHODS.qualitySubscribeChanges, input),
   },
+  scheduled: {
+    create: unary(WS_METHODS.scheduledCreate),
+    list: unary(WS_METHODS.scheduledList),
+    get: unary(WS_METHODS.scheduledGet),
+    cancel: unary(WS_METHODS.scheduledCancel),
+  },
   unattendedGrants: {
     create: unary(WS_METHODS.unattendedGrantCreate),
     list: unary(WS_METHODS.unattendedGrantList),
     revoke: unary(WS_METHODS.unattendedGrantRevoke),
+  },
+  ambient: {
+    configure: unary(WS_METHODS.ambientConfigure),
+    get: unary(WS_METHODS.ambientGet),
+    stop: unary(WS_METHODS.ambientStop),
+  },
+  backgroundJobs: {
+    start: unary(WS_METHODS.backgroundJobStart),
+    list: unary(WS_METHODS.backgroundJobList),
+    get: unary(WS_METHODS.backgroundJobGet),
+    output: unary(WS_METHODS.backgroundJobOutput),
+    cancel: unary(WS_METHODS.backgroundJobCancel),
+    wait: unary(WS_METHODS.backgroundJobWait),
+    subscribe: unary(WS_METHODS.backgroundJobSubscribe),
+    cleanup: unary(WS_METHODS.backgroundJobCleanup),
   },
 };

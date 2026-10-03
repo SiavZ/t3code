@@ -691,6 +691,7 @@ describe("ProviderCommandReactor", () => {
         message: { messageId, role: "user", text: "Scheduled work", attachments: [] },
         runtimeMode: "approval-required",
         interactionMode: "default",
+        expectedIdle: true,
         createdAt: now,
       });
       yield* harness.engine.dispatch({
@@ -724,6 +725,7 @@ describe("ProviderCommandReactor", () => {
         message: { messageId, role: "user", text: "Scheduled work", attachments: [] },
         runtimeMode: "approval-required",
         interactionMode: "default",
+        expectedIdle: true,
         createdAt: now,
       });
       yield* harness.engine.dispatch({

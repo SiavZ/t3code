@@ -12,6 +12,7 @@ import * as Coordination from "./coordination.ts";
 import * as Memory from "./memory.ts";
 import * as Quality from "./qualityRecords.ts";
 import * as Scheduled from "./scheduledWork.ts";
+import * as Jobs from "./backgroundJobs.ts";
 import * as Grants from "./unattendedGrants.ts";
 import { ProjectId } from "./baseSchemas.ts";
 import {
@@ -309,9 +310,24 @@ export const WS_METHODS = {
   memoryGlobalRead: "memoryGlobal.read",
   memoryGlobalWrite: "memoryGlobal.write",
   qualitySubscribeChanges: "quality.subscribeChanges",
+  ambientConfigure: "ambient.configure",
+  ambientGet: "ambient.get",
+  ambientStop: "ambient.stop",
+  scheduledCreate: "scheduled.create",
+  scheduledList: "scheduled.list",
+  scheduledGet: "scheduled.get",
+  scheduledCancel: "scheduled.cancel",
   unattendedGrantCreate: "unattendedGrants.create",
   unattendedGrantList: "unattendedGrants.list",
   unattendedGrantRevoke: "unattendedGrants.revoke",
+  backgroundJobStart: "backgroundJobs.start",
+  backgroundJobList: "backgroundJobs.list",
+  backgroundJobGet: "backgroundJobs.get",
+  backgroundJobOutput: "backgroundJobs.output",
+  backgroundJobCancel: "backgroundJobs.cancel",
+  backgroundJobWait: "backgroundJobs.wait",
+  backgroundJobSubscribe: "backgroundJobs.subscribe",
+  backgroundJobCleanup: "backgroundJobs.cleanup",
   memoryRemember: "memory.remember",
   memoryRecall: "memory.recall",
   memorySearch: "memory.search",
@@ -1557,6 +1573,41 @@ export const ParityToolsRpcGroup = RpcGroup.make(
     stream: true,
     error: Schema.Union([Quality.QualityRecordsError, EnvironmentAuthorizationError]),
   }),
+  Rpc.make(WS_METHODS.ambientConfigure, {
+    payload: Scheduled.AmbientWorkConfigureInput,
+    success: Scheduled.AmbientWorkRecord,
+    error: Schema.Union([Scheduled.ScheduledWorkError, EnvironmentAuthorizationError]),
+  }),
+  Rpc.make(WS_METHODS.ambientGet, {
+    payload: Scheduled.ScheduledWorkListInput,
+    success: Schema.NullOr(Scheduled.AmbientWorkRecord),
+    error: Schema.Union([Scheduled.ScheduledWorkError, EnvironmentAuthorizationError]),
+  }),
+  Rpc.make(WS_METHODS.ambientStop, {
+    payload: Scheduled.ScheduledWorkListInput,
+    success: Schema.NullOr(Scheduled.AmbientWorkRecord),
+    error: Schema.Union([Scheduled.ScheduledWorkError, EnvironmentAuthorizationError]),
+  }),
+  Rpc.make(WS_METHODS.scheduledCreate, {
+    payload: Scheduled.ScheduledWorkCreateInput,
+    success: Scheduled.ScheduledWorkRecord,
+    error: Schema.Union([Scheduled.ScheduledWorkError, EnvironmentAuthorizationError]),
+  }),
+  Rpc.make(WS_METHODS.scheduledList, {
+    payload: Scheduled.ScheduledWorkListInput,
+    success: Schema.Array(Scheduled.ScheduledWorkRecord),
+    error: Schema.Union([Scheduled.ScheduledWorkError, EnvironmentAuthorizationError]),
+  }),
+  Rpc.make(WS_METHODS.scheduledGet, {
+    payload: Scheduled.ScheduledWorkReadInput,
+    success: Scheduled.ScheduledWorkRecord,
+    error: Schema.Union([Scheduled.ScheduledWorkError, EnvironmentAuthorizationError]),
+  }),
+  Rpc.make(WS_METHODS.scheduledCancel, {
+    payload: Scheduled.ScheduledWorkReadInput,
+    success: Scheduled.ScheduledWorkRecord,
+    error: Schema.Union([Scheduled.ScheduledWorkError, EnvironmentAuthorizationError]),
+  }),
   Rpc.make(WS_METHODS.unattendedGrantCreate, {
     payload: Grants.UnattendedGrantCreateInput,
     success: Grants.UnattendedGrant,
@@ -1571,6 +1622,50 @@ export const ParityToolsRpcGroup = RpcGroup.make(
     payload: Grants.UnattendedGrantReadInput,
     success: Grants.UnattendedGrant,
     error: Schema.Union([Scheduled.ScheduledWorkError, EnvironmentAuthorizationError]),
+  }),
+  Rpc.make(WS_METHODS.backgroundJobStart, {
+    payload: Jobs.BackgroundJobStartInput,
+    success: Jobs.BackgroundJobRecord,
+    error: Schema.Union([Jobs.BackgroundJobError, EnvironmentAuthorizationError]),
+  }),
+  Rpc.make(WS_METHODS.backgroundJobList, {
+    payload: Scheduled.ScheduledWorkListInput,
+    success: Schema.Array(Jobs.BackgroundJobRecord),
+    error: Schema.Union([Jobs.BackgroundJobError, EnvironmentAuthorizationError]),
+  }),
+  Rpc.make(WS_METHODS.backgroundJobGet, {
+    payload: Jobs.BackgroundJobReadInput,
+    success: Jobs.BackgroundJobRecord,
+    error: Schema.Union([Jobs.BackgroundJobError, EnvironmentAuthorizationError]),
+  }),
+  Rpc.make(WS_METHODS.backgroundJobOutput, {
+    payload: Jobs.BackgroundJobOutputInput,
+    success: Jobs.BackgroundJobOutput,
+    error: Schema.Union([Jobs.BackgroundJobError, EnvironmentAuthorizationError]),
+  }),
+  Rpc.make(WS_METHODS.backgroundJobCancel, {
+    payload: Jobs.BackgroundJobReadInput,
+    success: Jobs.BackgroundJobRecord,
+    error: Schema.Union([Jobs.BackgroundJobError, EnvironmentAuthorizationError]),
+  }),
+  Rpc.make(WS_METHODS.backgroundJobWait, {
+    payload: Jobs.BackgroundJobWaitInput,
+    success: Schema.Struct({ timedOut: Schema.Boolean, job: Jobs.BackgroundJobRecord }),
+    error: Schema.Union([Jobs.BackgroundJobError, EnvironmentAuthorizationError]),
+  }),
+  Rpc.make(WS_METHODS.backgroundJobSubscribe, {
+    payload: Schema.Struct({
+      ...Jobs.BackgroundJobReadInput.fields,
+      notify: Schema.Boolean,
+      wake: Schema.Boolean,
+    }),
+    success: Jobs.BackgroundJobRecord,
+    error: Schema.Union([Jobs.BackgroundJobError, EnvironmentAuthorizationError]),
+  }),
+  Rpc.make(WS_METHODS.backgroundJobCleanup, {
+    payload: Jobs.BackgroundJobReadInput,
+    success: Schema.Void,
+    error: Schema.Union([Jobs.BackgroundJobError, EnvironmentAuthorizationError]),
   }),
   Rpc.make(WS_METHODS.memoryRemember, {
     payload: Schema.Struct({ projectId: ProjectId, input: Memory.MemoryRememberInput }),

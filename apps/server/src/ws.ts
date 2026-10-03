@@ -108,10 +108,13 @@ import {
 } from "./orchestration/Normalizer.ts";
 import * as OrchestrationEngine from "./orchestration/Services/OrchestrationEngine.ts";
 import * as OwnedWorkers from "./orchestration/OwnedWorkers.ts";
+import * as AmbientWork from "./orchestration/AmbientWork.ts";
 import * as GlobalMemory from "./memory/GlobalMemory.ts";
 import * as Memory from "./memory/Memory.ts";
 import * as QualityRecords from "./orchestration/QualityRecords.ts";
+import * as ScheduledWork from "./orchestration/ScheduledWork.ts";
 import * as UnattendedGrants from "./orchestration/UnattendedGrants.ts";
+import * as BackgroundJobs from "./background/BackgroundJobs.ts";
 import * as CoordinationPlans from "./orchestration/CoordinationPlans.ts";
 import * as ProjectionSnapshotQuery from "./orchestration/Services/ProjectionSnapshotQuery.ts";
 import { ThreadDeletionReactor } from "./orchestration/Services/ThreadDeletionReactor.ts";
@@ -537,18 +540,37 @@ const makeWsRpcLayer = (
 const makeParityToolsRpcLayer = () =>
   ParityToolsRpcGroup.toLayer(
     Effect.gen(function* () {
+      const ambientWork = yield* AmbientWork.AmbientWork;
       const memory = yield* Memory.MemoryService;
       const qualityRecords = yield* QualityRecords.QualityRecords;
+      const scheduledWork = yield* ScheduledWork.ScheduledWork;
       const unattendedGrants = yield* UnattendedGrants.UnattendedGrants;
+      const backgroundJobs = yield* BackgroundJobs.BackgroundJobs;
       const coordinationPlans = yield* CoordinationPlans.CoordinationPlans;
       return ParityToolsRpcGroup.of({
         [WS_METHODS.qualitySubscribeChanges]: (input) =>
           qualityRecords.subscribe(input, { threadId: input.threadId, source: "user-reported" }),
+        [WS_METHODS.ambientConfigure]: (input) =>
+          ambientWork.configure(input, { source: "client" }),
+        [WS_METHODS.ambientGet]: (input) => ambientWork.get(input),
+        [WS_METHODS.ambientStop]: (input) => ambientWork.stop(input),
+        [WS_METHODS.scheduledCreate]: (input) => scheduledWork.create(input),
+        [WS_METHODS.scheduledList]: (input) => scheduledWork.list(input),
+        [WS_METHODS.scheduledGet]: (input) => scheduledWork.get(input),
+        [WS_METHODS.scheduledCancel]: (input) => scheduledWork.cancel(input),
         [WS_METHODS.unattendedGrantCreate]: (input) =>
           unattendedGrants.create(input, { source: "client" }),
         [WS_METHODS.unattendedGrantList]: (input) => unattendedGrants.list(input),
         [WS_METHODS.unattendedGrantRevoke]: (input) =>
           unattendedGrants.revoke(input, { source: "client" }),
+        [WS_METHODS.backgroundJobStart]: (input) => backgroundJobs.start(input),
+        [WS_METHODS.backgroundJobList]: (input) => backgroundJobs.list(input),
+        [WS_METHODS.backgroundJobGet]: (input) => backgroundJobs.get(input),
+        [WS_METHODS.backgroundJobOutput]: (input) => backgroundJobs.output(input),
+        [WS_METHODS.backgroundJobWait]: (input) => backgroundJobs.wait(input),
+        [WS_METHODS.backgroundJobCancel]: (input) => backgroundJobs.cancel(input),
+        [WS_METHODS.backgroundJobSubscribe]: (input) => backgroundJobs.subscribe(input),
+        [WS_METHODS.backgroundJobCleanup]: (input) => backgroundJobs.cleanup(input),
         [WS_METHODS.memoryRemember]: ({ projectId, input }) =>
           memory.remember(input, { projectId, allowGlobal: false }),
         [WS_METHODS.memoryRecall]: ({ projectId, input }) =>
@@ -4210,10 +4232,13 @@ export const websocketRpcRouteLayer = Layer.unwrap(
     });
     const pullRequests = yield* PullRequestService.PullRequestService;
     const ownedWorkers = yield* OwnedWorkers.OwnedWorkers;
+    const ambientWork = yield* AmbientWork.AmbientWork;
     const globalMemory = yield* GlobalMemory.GlobalMemory;
     const memory = yield* Memory.MemoryService;
     const qualityRecords = yield* QualityRecords.QualityRecords;
+    const scheduledWork = yield* ScheduledWork.ScheduledWork;
     const unattendedGrants = yield* UnattendedGrants.UnattendedGrants;
+    const backgroundJobs = yield* BackgroundJobs.BackgroundJobs;
     const coordinationPlans = yield* CoordinationPlans.CoordinationPlans;
     const sql = yield* SqlClient.SqlClient;
     return HttpRouter.add(
@@ -4260,9 +4285,12 @@ export const websocketRpcRouteLayer = Layer.unwrap(
                 // mutation invalidates the HTTP diff cache that every client reads from.
                 Layer.provide(Layer.succeed(PullRequestService.PullRequestService, pullRequests)),
                 Layer.provide(Layer.succeed(OwnedWorkers.OwnedWorkers, ownedWorkers)),
+                Layer.provide(Layer.succeed(AmbientWork.AmbientWork, ambientWork)),
                 Layer.provide(Layer.succeed(Memory.MemoryService, memory)),
                 Layer.provide(Layer.succeed(QualityRecords.QualityRecords, qualityRecords)),
+                Layer.provide(Layer.succeed(ScheduledWork.ScheduledWork, scheduledWork)),
                 Layer.provide(Layer.succeed(UnattendedGrants.UnattendedGrants, unattendedGrants)),
+                Layer.provide(Layer.succeed(BackgroundJobs.BackgroundJobs, backgroundJobs)),
               )
               .pipe(
                 Layer.provide(Layer.succeed(GlobalMemory.GlobalMemory, globalMemory)),

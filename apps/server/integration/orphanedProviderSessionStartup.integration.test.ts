@@ -41,6 +41,9 @@ import * as ProviderSessionDirectory from "../src/provider/Services/ProviderSess
 import * as ProviderSessionReaper from "../src/provider/Services/ProviderSessionReaper.ts";
 import * as RepositoryIdentityResolver from "../src/project/RepositoryIdentityResolver.ts";
 import * as ServerLifecycleEvents from "../src/serverLifecycleEvents.ts";
+import { parityStartupDependenciesLayer } from "../src/testUtils/parityDependencies.ts";
+import * as BackgroundPolicy from "../src/background/BackgroundPolicy.ts";
+import * as HostPowerMonitor from "../src/background/HostPowerMonitor.ts";
 import * as ServerRuntimeStartup from "../src/serverRuntimeStartup.ts";
 import * as ServerSettings from "../src/serverSettings.ts";
 import * as AnalyticsService from "../src/telemetry/AnalyticsService.ts";
@@ -259,7 +262,13 @@ it.effect(
 
       const secondRuntime = makePersistedRuntimeLayer(config.dbPath);
       const startupLayer = ServerRuntimeStartup.layer.pipe(
+        Layer.provideMerge(parityStartupDependenciesLayer),
         Layer.provideMerge(secondRuntime),
+        Layer.provideMerge(
+          BackgroundPolicy.layer.pipe(
+            Layer.provide(Layer.effect(HostPowerMonitor.HostPowerMonitor, HostPowerMonitor.make())),
+          ),
+        ),
         Layer.provideMerge(startupDependencies),
       );
 

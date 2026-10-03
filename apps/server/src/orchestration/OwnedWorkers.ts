@@ -2,6 +2,7 @@ import {
   type ThreadUnattendedAuthority,
   isWorkerRuntimeModeAllowed,
   CoordinationError,
+  type RuntimeMode,
   ThreadId,
   WorkerOperationError,
   WorkerSpawnInput,
@@ -40,6 +41,7 @@ import * as ProjectionSnapshotQuery from "./Services/ProjectionSnapshotQuery.ts"
 
 export interface WorkerSpawnAuthority {
   readonly unattendedAuthority?: ThreadUnattendedAuthority;
+  readonly runtimeModeCeiling?: RuntimeMode;
   readonly mcpCapabilityCeiling?: ReadonlyArray<
     NonNullable<OrchestrationThreadShell["worker"]>["mcpCapabilityCeiling"][number]
   >;
@@ -275,11 +277,12 @@ const make = Effect.gen(function* () {
       snapshots.getThreadActivationAuthority(input.callerThreadId),
     );
     const unattendedAuthority = authority?.unattendedAuthority ?? Option.getOrUndefined(inherited);
+    const requestedMode = authority?.runtimeModeCeiling ?? caller.runtimeMode;
     const runtimeModeCeiling = unattendedAuthority
-      ? isWorkerRuntimeModeAllowed(caller.runtimeMode, unattendedAuthority.runtimeModeCeiling)
-        ? caller.runtimeMode
+      ? isWorkerRuntimeModeAllowed(requestedMode, unattendedAuthority.runtimeModeCeiling)
+        ? requestedMode
         : unattendedAuthority.runtimeModeCeiling
-      : undefined;
+      : authority?.runtimeModeCeiling;
     let mcpCapabilityCeiling = [...((yield* threadCapabilities(input.callerThreadId)) ?? [])];
     if (unattendedAuthority)
       mcpCapabilityCeiling = mcpCapabilityCeiling.filter((capability) =>

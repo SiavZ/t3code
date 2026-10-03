@@ -78,7 +78,7 @@ saved memories. **Allow global memory** is environment-wide and lets authorized
 clients manage memories shared across projects. It does not grant agents global
 access or enable automatic global recall.
 
-Unattended work requires a separate,
+Scheduling, ambient work, and background commands require a separate,
 administrator-issued grant for the owning thread. Tool access alone is not that
 grant. Revoking a grant prevents further work under it; it cannot be replaced by
 an agent choosing a more permissive grant.

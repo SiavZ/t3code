@@ -7,6 +7,7 @@ import * as McpSchema from "effect/unstable/ai/McpSchema";
 import * as Tool from "effect/unstable/ai/Tool";
 import { CoordinationToolkit } from "./toolkits/coordination/tools.ts";
 import { WorkersToolkit } from "./toolkits/workers/tools.ts";
+import { AutomationToolkit } from "./toolkits/automation/tools.ts";
 import { MemoryToolkit } from "./toolkits/memory/tools.ts";
 import { QualityRecordsToolkit } from "./toolkits/qualityRecords/tools.ts";
 
@@ -28,6 +29,21 @@ const registrationHandlers = Layer.mergeAll(
     workers_stop: uncalled,
     workers_wait: uncalled,
   }),
+  AutomationToolkit.toLayer({
+    schedule_create: uncalled,
+    schedule_list: uncalled,
+    schedule_get: uncalled,
+    schedule_cancel: uncalled,
+    unattended_grants_list: uncalled,
+    background_job_start: uncalled,
+    background_job_list: uncalled,
+    background_job_get: uncalled,
+    background_job_output: uncalled,
+    background_job_cancel: uncalled,
+    background_job_wait: uncalled,
+    background_job_subscribe: uncalled,
+    background_job_cleanup: uncalled,
+  }),
   MemoryToolkit.toLayer({
     memory_remember: uncalled,
     memory_recall: uncalled,
@@ -47,10 +63,11 @@ it.effect("all added toolkits register through the MCP server", () =>
     Effect.gen(function* () {
       yield* McpServer.registerToolkit(CoordinationToolkit);
       yield* McpServer.registerToolkit(WorkersToolkit);
+      yield* McpServer.registerToolkit(AutomationToolkit);
       yield* McpServer.registerToolkit(MemoryToolkit);
       yield* McpServer.registerToolkit(QualityRecordsToolkit);
       const server = yield* McpServer.McpServer;
-      expect(server.tools.length).toBe(19);
+      expect(server.tools.length).toBe(32);
       for (const { tool } of server.tools) expect(tool.inputSchema.type, tool.name).toBe("object");
     }).pipe(Effect.provide(registrationHandlers), Effect.provide(McpServer.McpServer.layer)),
   ),
@@ -61,6 +78,7 @@ it.effect("all added toolkits expose MCP-compatible object parameter schemas", (
     for (const toolkit of [
       CoordinationToolkit,
       WorkersToolkit,
+      AutomationToolkit,
       MemoryToolkit,
       QualityRecordsToolkit,
     ]) {
