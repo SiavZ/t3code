@@ -29,6 +29,10 @@ export const OPTIONAL_AGENT_TOOL_DETAILS: Record<
     label: "Agent documents",
     description: "Create documents and interactive views in the client.",
   },
+  knowledge: {
+    label: "Knowledge",
+    description: "Search workspace code, conversation history and provider skills.",
+  },
 };
 
 /** Change one flag using each target's effective value, never a representative's array. */

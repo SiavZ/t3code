@@ -167,6 +167,11 @@ import * as AgentDocuments from "./orchestration/AgentDocuments.ts";
 import * as DocumentLifecycle from "./orchestration/DocumentLifecycle.ts";
 import * as AgentDocumentAssets from "./orchestration/AgentDocumentAssets.ts";
 import * as SharedWorkspaceActivity from "./workspace/SharedWorkspaceActivity.ts";
+import * as ExternalHistoryReaders from "./project/ExternalHistoryReaders.ts";
+import * as AgentSessionScanner from "./project/AgentSessionScanner.ts";
+import * as WorkspaceAgentSearch from "./workspace/WorkspaceAgentSearch.ts";
+import * as HistorySearch from "./project/HistorySearch.ts";
+import * as SkillManagement from "./provider/SkillManagement.ts";
 import * as Memory from "./memory/Memory.ts";
 import * as QualityRecords from "./orchestration/QualityRecords.ts";
 import * as ScheduledWork from "./orchestration/ScheduledWork.ts";
@@ -480,6 +485,28 @@ const CloudManagedEndpointRuntimeLive = Layer.mergeAll(
   ),
 );
 
+const ExternalHistoryReadersLayerLive = ExternalHistoryReaders.layer.pipe(
+  Layer.provide(
+    Layer.effect(
+      ExternalHistoryReaders.ExternalHistoryStores,
+      Effect.gen(function* () {
+        const settings = yield* ServerSettings.ServerSettingsService;
+        return {
+          get: settings.getSettings.pipe(
+            Effect.map((value) => value.externalHistoryStores ?? []),
+            Effect.catch((cause) =>
+              Effect.logWarning("External history stores unavailable", { cause }).pipe(
+                Effect.as([]),
+              ),
+            ),
+          ),
+        };
+      }),
+    ),
+  ),
+  Layer.provide(ServerSettingsLayerLive),
+);
+
 const ProviderRuntimeLayerLive = ProviderSessionReaperLive.pipe(
   Layer.provideMerge(GlobalMemory.layer),
   // Subscribes to `account.rate-limits.updated` so usage bars track live
@@ -494,6 +521,12 @@ const ProviderRuntimeLayerLive = ProviderSessionReaperLive.pipe(
   Layer.provideMerge(OwnedWorkers.layer),
   Layer.provideMerge(
     Layer.mergeAll(
+      WorkspaceAgentSearch.layer,
+      HistorySearch.layer.pipe(
+        Layer.provide(AgentSessionScanner.layer),
+        Layer.provide(ExternalHistoryReadersLayerLive),
+      ),
+      SkillManagement.layer,
       Memory.layer,
       QualityRecords.layer,
       AgentDocuments.layer,

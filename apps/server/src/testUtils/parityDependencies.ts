@@ -9,7 +9,11 @@ import * as OwnedWorkers from "../orchestration/OwnedWorkers.ts";
 import * as CoordinationPlans from "../orchestration/CoordinationPlans.ts";
 import * as CoordinationPlanStore from "../orchestration/CoordinationPlanStore.ts";
 import * as CoordinationReactor from "../orchestration/CoordinationReactor.ts";
+import * as WorkspaceAgentSearch from "../workspace/WorkspaceAgentSearch.ts";
 import * as WorkspacePaths from "../workspace/WorkspacePaths.ts";
+import * as HistorySearch from "../project/HistorySearch.ts";
+import * as AgentSessionScanner from "../project/AgentSessionScanner.ts";
+import * as SkillManagement from "../provider/SkillManagement.ts";
 import * as Memory from "../memory/Memory.ts";
 import * as GlobalMemory from "../memory/GlobalMemory.ts";
 import * as QualityRecords from "../orchestration/QualityRecords.ts";
@@ -42,6 +46,9 @@ export const parityDependenciesLayer = parityStartupDependenciesLayer.pipe(
     Layer.mergeAll(
       CoordinationPlans.layer.pipe(Layer.provide(CoordinationPlanStore.layer)),
       CoordinationReactor.layer,
+      WorkspaceAgentSearch.layer,
+      HistorySearch.layer.pipe(Layer.provide(AgentSessionScanner.layer)),
+      SkillManagement.layer,
       Memory.layer,
       QualityRecords.layer,
       AgentDocumentAssets.layer,

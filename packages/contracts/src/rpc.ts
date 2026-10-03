@@ -9,6 +9,9 @@ import * as Schema from "effect/Schema";
 import * as Rpc from "effect/unstable/rpc/Rpc";
 import * as RpcGroup from "effect/unstable/rpc/RpcGroup";
 import * as Coordination from "./coordination.ts";
+import * as AgentSearch from "./agentSearch.ts";
+import * as HistorySearch from "./historySearch.ts";
+import * as Skills from "./skillManagement.ts";
 import * as Memory from "./memory.ts";
 import * as Quality from "./qualityRecords.ts";
 import * as Scheduled from "./scheduledWork.ts";
@@ -353,6 +356,13 @@ export const WS_METHODS = {
   coordinationMailboxWrite: "coordination.mailboxWrite",
   coordinationRead: "coordination.read",
   coordinationWrite: "coordination.write",
+  agentSearch: "agentSearch.search",
+  historySearch: "history.search",
+  historyRead: "history.read",
+  skillsList: "skills.list",
+  skillsRead: "skills.read",
+  skillsLoad: "skills.load",
+  skillsReload: "skills.reload",
   agentDocumentsRead: "agentDocuments.read",
   agentDocumentsWrite: "agentDocuments.write",
   agentDocumentsAction: "agentDocuments.action",
@@ -1770,6 +1780,41 @@ export const ParityToolsRpcGroup = RpcGroup.make(
     payload: Coordination.CoordinationWriteInput,
     success: Coordination.CoordinationPlan,
     error: Schema.Union([Coordination.CoordinationError, EnvironmentAuthorizationError]),
+  }),
+  Rpc.make(WS_METHODS.agentSearch, {
+    payload: AgentSearch.AgentSearchInput,
+    success: AgentSearch.AgentSearchResult,
+    error: Schema.Union([AgentSearch.AgentSearchError, EnvironmentAuthorizationError]),
+  }),
+  Rpc.make(WS_METHODS.historySearch, {
+    payload: HistorySearch.HistorySearchInput,
+    success: HistorySearch.HistorySearchResult,
+    error: Schema.Union([HistorySearch.HistorySearchError, EnvironmentAuthorizationError]),
+  }),
+  Rpc.make(WS_METHODS.historyRead, {
+    payload: HistorySearch.HistoryReadInput,
+    success: HistorySearch.NormalizedHistorySession,
+    error: Schema.Union([HistorySearch.HistorySearchError, EnvironmentAuthorizationError]),
+  }),
+  Rpc.make(WS_METHODS.skillsList, {
+    payload: Skills.SkillListInput,
+    success: Skills.SkillListResult,
+    error: Schema.Union([Skills.SkillManagementError, EnvironmentAuthorizationError]),
+  }),
+  Rpc.make(WS_METHODS.skillsRead, {
+    payload: Skills.SkillReadInput,
+    success: Skills.SkillReadResult,
+    error: Schema.Union([Skills.SkillManagementError, EnvironmentAuthorizationError]),
+  }),
+  Rpc.make(WS_METHODS.skillsLoad, {
+    payload: Skills.SkillReadInput,
+    success: Skills.SkillReadResult,
+    error: Schema.Union([Skills.SkillManagementError, EnvironmentAuthorizationError]),
+  }),
+  Rpc.make(WS_METHODS.skillsReload, {
+    payload: Skills.SkillListInput,
+    success: Skills.SkillListResult,
+    error: Schema.Union([Skills.SkillManagementError, EnvironmentAuthorizationError]),
   }),
 );
 

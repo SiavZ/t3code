@@ -33,6 +33,9 @@ describe("RPC authorization scopes", () => {
       WS_METHODS.backgroundJobList,
       WS_METHODS.backgroundJobOutput,
       WS_METHODS.backgroundJobWait,
+      WS_METHODS.agentSearch,
+      WS_METHODS.historySearch,
+      WS_METHODS.skillsRead,
     ])
       expect(requiredScopeForRpcMethod(method)).toBe(AuthOrchestrationReadScope);
     for (const method of [
@@ -49,6 +52,7 @@ describe("RPC authorization scopes", () => {
       WS_METHODS.backgroundJobStart,
       WS_METHODS.backgroundJobCancel,
       WS_METHODS.backgroundJobSubscribe,
+      WS_METHODS.skillsLoad,
     ])
       expect(requiredScopeForRpcMethod(method)).toBe(AuthOrchestrationOperateScope);
   });

@@ -7,14 +7,14 @@ import {
 
 describe("optional agent tool settings", () => {
   it("preserves each target's unrelated flags when enabling or disabling one tool", () => {
-    const first = ["agent-documents", "memory"] as const;
+    const first = ["knowledge", "memory"] as const;
     const second = ["automation"] as const;
-    expect(setOptionalAgentToolCapability(first, "memory", false)).toEqual(["agent-documents"]);
+    expect(setOptionalAgentToolCapability(first, "memory", false)).toEqual(["knowledge"]);
     expect(setOptionalAgentToolCapability(second, "memory", true)).toEqual([
       "memory",
       "automation",
     ]);
-    expect(first).toEqual(["agent-documents", "memory"]);
+    expect(first).toEqual(["knowledge", "memory"]);
     expect(second).toEqual(["automation"]);
   });
   it("is idempotent, deduplicated and bounded by the capability catalog", () => {
@@ -23,7 +23,7 @@ describe("optional agent tool settings", () => {
     ]);
     expect(
       setOptionalAgentToolCapability(OPTIONAL_AGENT_TOOL_CAPABILITIES, "memory", true),
-    ).toHaveLength(5);
+    ).toHaveLength(6);
     expect(setOptionalAgentToolCapability([], "memory", false)).toEqual([]);
   });
   it("disabling any capability never broadens access", () => {
@@ -33,7 +33,7 @@ describe("optional agent tool settings", () => {
         capability,
         false,
       );
-      expect(narrowed).toHaveLength(4);
+      expect(narrowed).toHaveLength(5);
       expect(narrowed).not.toContain(capability);
       expect(narrowed.every((entry) => OPTIONAL_AGENT_TOOL_CAPABILITIES.includes(entry))).toBe(
         true,
@@ -43,16 +43,13 @@ describe("optional agent tool settings", () => {
   it("compares the selected flag rather than entire capability arrays", () => {
     expect(
       optionalAgentToolCapabilityValue(
-        [
-          { agentToolCapabilities: ["memory", "agent-documents"] },
-          { agentToolCapabilities: ["memory"] },
-        ],
+        [{ agentToolCapabilities: ["memory", "knowledge"] }, { agentToolCapabilities: ["memory"] }],
         "memory",
       ),
     ).toBe(true);
     expect(
       optionalAgentToolCapabilityValue(
-        [{ agentToolCapabilities: ["agent-documents"] }, { agentToolCapabilities: [] }],
+        [{ agentToolCapabilities: ["knowledge"] }, { agentToolCapabilities: [] }],
         "memory",
       ),
     ).toBe(false);

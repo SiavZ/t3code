@@ -1067,7 +1067,7 @@ export const ProjectSettingsOverrides = Schema.Struct({
   enableAgentBrowserAccess: Schema.optionalKey(Schema.Boolean),
   enableAgentDeviceAccess: Schema.optionalKey(Schema.Boolean),
   agentToolCapabilities: Schema.optionalKey(
-    Schema.Array(OptionalAgentToolCapability).check(Schema.isMaxLength(5)),
+    Schema.Array(OptionalAgentToolCapability).check(Schema.isMaxLength(6)),
   ),
   enableMemoryAutoRecall: Schema.optionalKey(Schema.Boolean),
   textGenerationModelSelection: Schema.optionalKey(ModelSelection),
@@ -1113,7 +1113,15 @@ export const StorageCleanupSettings = Schema.Struct({
 });
 export type StorageCleanupSettings = typeof StorageCleanupSettings.Type;
 
+export const ExternalHistoryStore = Schema.Struct({
+  source: Schema.Literals(["pi", "opencode"]),
+  path: Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(4096)),
+});
+export type ExternalHistoryStore = typeof ExternalHistoryStore.Type;
+const ExternalHistoryStores = Schema.Array(ExternalHistoryStore).check(Schema.isMaxLength(10));
+
 export const ServerSettings = Schema.Struct({
+  externalHistoryStores: ExternalHistoryStores.pipe(Schema.withDecodingDefault(Effect.succeed([]))),
   enableGlobalMemory: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
   worktreeCleanup: WorktreeCleanup.pipe(Schema.withDecodingDefault(Effect.succeed(null))),
   storageCleanup: StorageCleanupSettings.pipe(
@@ -1144,7 +1152,7 @@ export const ServerSettings = Schema.Struct({
    */
   enableAgentBrowserAccess: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
   agentToolCapabilities: Schema.Array(OptionalAgentToolCapability)
-    .check(Schema.isMaxLength(5))
+    .check(Schema.isMaxLength(6))
     .pipe(Schema.withDecodingDefault(Effect.succeed([]))),
   enableMemoryAutoRecall: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
   projectAgentBrowserAccessOverrides: Schema.Record(ProjectId, Schema.Boolean).pipe(
@@ -1507,13 +1515,14 @@ export const ServerSettingsPatch = Schema.Struct({
     }),
   ),
   // Server settings
+  externalHistoryStores: Schema.optionalKey(ExternalHistoryStores),
   enableGlobalMemory: Schema.optionalKey(Schema.Boolean),
   responseStreamingMode: Schema.optionalKey(ResponseStreamingMode),
   enableProviderUpdateChecks: Schema.optionalKey(Schema.Boolean),
   continueThreadsAfterServerUpdate: Schema.optionalKey(Schema.Boolean),
   enableAgentBrowserAccess: Schema.optionalKey(Schema.Boolean),
   agentToolCapabilities: Schema.optionalKey(
-    Schema.Array(OptionalAgentToolCapability).check(Schema.isMaxLength(5)),
+    Schema.Array(OptionalAgentToolCapability).check(Schema.isMaxLength(6)),
   ),
   enableMemoryAutoRecall: Schema.optionalKey(Schema.Boolean),
   projectAgentBrowserAccessOverrides: Schema.optionalKey(

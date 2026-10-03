@@ -118,6 +118,9 @@ import * as ScheduledWork from "./orchestration/ScheduledWork.ts";
 import * as UnattendedGrants from "./orchestration/UnattendedGrants.ts";
 import * as BackgroundJobs from "./background/BackgroundJobs.ts";
 import * as CoordinationPlans from "./orchestration/CoordinationPlans.ts";
+import * as WorkspaceAgentSearch from "./workspace/WorkspaceAgentSearch.ts";
+import * as HistorySearch from "./project/HistorySearch.ts";
+import * as SkillManagement from "./provider/SkillManagement.ts";
 import * as ProjectionSnapshotQuery from "./orchestration/Services/ProjectionSnapshotQuery.ts";
 import { ThreadDeletionReactor } from "./orchestration/Services/ThreadDeletionReactor.ts";
 import {
@@ -550,6 +553,9 @@ const makeParityToolsRpcLayer = () =>
       const unattendedGrants = yield* UnattendedGrants.UnattendedGrants;
       const backgroundJobs = yield* BackgroundJobs.BackgroundJobs;
       const coordinationPlans = yield* CoordinationPlans.CoordinationPlans;
+      const agentSearch = yield* WorkspaceAgentSearch.WorkspaceAgentSearch;
+      const historySearch = yield* HistorySearch.HistorySearch;
+      const skillManagement = yield* SkillManagement.SkillManagement;
       return ParityToolsRpcGroup.of({
         [WS_METHODS.qualitySubscribeChanges]: (input) =>
           qualityRecords.subscribe(input, { threadId: input.threadId, source: "user-reported" }),
@@ -597,6 +603,13 @@ const makeParityToolsRpcLayer = () =>
         [WS_METHODS.coordinationMailboxWrite]: (input) => coordinationPlans.mailboxWrite(input),
         [WS_METHODS.coordinationRead]: (input) => coordinationPlans.read(input),
         [WS_METHODS.coordinationWrite]: (input) => coordinationPlans.write(input),
+        [WS_METHODS.agentSearch]: (input) => agentSearch.search(input),
+        [WS_METHODS.historySearch]: (input) => historySearch.search(input),
+        [WS_METHODS.historyRead]: (input) => historySearch.readHistory(input),
+        [WS_METHODS.skillsList]: (input) => skillManagement.list(input),
+        [WS_METHODS.skillsRead]: (input) => skillManagement.read(input),
+        [WS_METHODS.skillsLoad]: (input) => skillManagement.load(input),
+        [WS_METHODS.skillsReload]: (input) => skillManagement.reload(input),
       });
     }),
   );
@@ -4251,6 +4264,9 @@ export const websocketRpcRouteLayer = Layer.unwrap(
     const unattendedGrants = yield* UnattendedGrants.UnattendedGrants;
     const backgroundJobs = yield* BackgroundJobs.BackgroundJobs;
     const coordinationPlans = yield* CoordinationPlans.CoordinationPlans;
+    const agentSearch = yield* WorkspaceAgentSearch.WorkspaceAgentSearch;
+    const historySearch = yield* HistorySearch.HistorySearch;
+    const skillManagement = yield* SkillManagement.SkillManagement;
     const sql = yield* SqlClient.SqlClient;
     return HttpRouter.add(
       "GET",
@@ -4312,6 +4328,11 @@ export const websocketRpcRouteLayer = Layer.unwrap(
                 Layer.provide(
                   Layer.succeed(CoordinationPlans.CoordinationPlans, coordinationPlans),
                 ),
+                Layer.provide(
+                  Layer.succeed(WorkspaceAgentSearch.WorkspaceAgentSearch, agentSearch),
+                ),
+                Layer.provide(Layer.succeed(HistorySearch.HistorySearch, historySearch)),
+                Layer.provide(Layer.succeed(SkillManagement.SkillManagement, skillManagement)),
                 Layer.provide(
                   SourceControlDiscovery.layer.pipe(
                     Layer.provide(

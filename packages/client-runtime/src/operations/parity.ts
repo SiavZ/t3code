@@ -71,4 +71,15 @@ export const parityOperations = {
     subscribe: unary(WS_METHODS.backgroundJobSubscribe),
     cleanup: unary(WS_METHODS.backgroundJobCleanup),
   },
+  search: {
+    workspace: unary(WS_METHODS.agentSearch),
+    history: unary(WS_METHODS.historySearch),
+    readHistory: unary(WS_METHODS.historyRead),
+  },
+  skills: {
+    list: unary(WS_METHODS.skillsList),
+    read: unary(WS_METHODS.skillsRead),
+    load: unary(WS_METHODS.skillsLoad),
+    reload: unary(WS_METHODS.skillsReload),
+  },
 };

@@ -25,6 +25,7 @@ describe("optional agent tools", () => {
     const settings = decodeServerSettings({});
     expect(settings.agentToolCapabilities).toEqual([]);
     expect(settings.enableMemoryAutoRecall).toBe(false);
+    expect(settings.externalHistoryStores).toEqual([]);
     expect(settings.enableGlobalMemory).toBe(false);
   });
 
@@ -40,9 +41,13 @@ describe("optional agent tools", () => {
     expect(decodeServerSettingsPatch(input)).toEqual(input);
   });
 
-  it("round-trips explicit global consent without project fanout", () => {
+  it("round-trips explicit global consent and configured external history roots without project fanout", () => {
     const input = {
       enableGlobalMemory: true,
+      externalHistoryStores: [
+        { source: "pi", path: "/approved/pi-sessions" },
+        { source: "opencode", path: "/approved/opencode.sqlite" },
+      ],
     };
     expect(encodeServerSettings(decodeServerSettings(input))).toMatchObject(input);
     expect(decodeServerSettingsPatch(input)).toEqual(input);
@@ -51,9 +56,24 @@ describe("optional agent tools", () => {
         projectSettingsOverrides: { project: input },
       }).projectSettingsOverrides,
     ).toEqual({ project: {} });
-    expect(decodeServerSettingsPatch({ enableGlobalMemory: false })).toEqual({
+    expect(
+      decodeServerSettingsPatch({ enableGlobalMemory: false, externalHistoryStores: [] }),
+    ).toEqual({
       enableGlobalMemory: false,
+      externalHistoryStores: [],
     });
+  });
+
+  it("rejects unsupported, empty and oversized external history configurations", () => {
+    for (const externalHistoryStores of [
+      [{ source: "cursor", path: "/unverified/store" }],
+      [{ source: "pi", path: "" }],
+      [{ source: "opencode", path: "x".repeat(4097) }],
+      Array.from({ length: 11 }, () => ({ source: "pi", path: "/approved/sessions" })),
+    ]) {
+      expect(() => decodeServerSettingsPatch({ externalHistoryStores })).toThrow();
+      expect(() => decodeServerSettings({ externalHistoryStores })).toThrow();
+    }
   });
 
   it("does not accept existing authority capabilities as optional grant flags", () => {

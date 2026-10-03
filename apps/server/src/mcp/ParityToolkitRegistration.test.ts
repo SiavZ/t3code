@@ -25,6 +25,7 @@ import { WorkersToolkit } from "./toolkits/workers/tools.ts";
 import { AutomationToolkit } from "./toolkits/automation/tools.ts";
 import { MemoryToolkit } from "./toolkits/memory/tools.ts";
 import { QualityRecordsToolkit } from "./toolkits/qualityRecords/tools.ts";
+import { KnowledgeToolkit } from "./toolkits/knowledge/tools.ts";
 
 const decodeToolJsonSchema = Schema.decodeUnknownEffect(McpSchema.ToolJsonSchema);
 const owner = ThreadId.make("document-owner");
@@ -211,6 +212,15 @@ const registrationHandlers = Layer.mergeAll(
     quality_records_update: uncalled,
     quality_records_get: uncalled,
   }),
+  KnowledgeToolkit.toLayer({
+    knowledge_code_search: uncalled,
+    knowledge_history_search: uncalled,
+    knowledge_history_read: uncalled,
+    knowledge_skills_list: uncalled,
+    knowledge_skills_read: uncalled,
+    knowledge_skills_load: uncalled,
+    knowledge_skills_reload: uncalled,
+  }),
 );
 it.effect("all added toolkits register through the MCP server", () =>
   Effect.scoped(
@@ -220,8 +230,9 @@ it.effect("all added toolkits register through the MCP server", () =>
       yield* McpServer.registerToolkit(AutomationToolkit);
       yield* McpServer.registerToolkit(MemoryToolkit);
       yield* McpServer.registerToolkit(QualityRecordsToolkit);
+      yield* McpServer.registerToolkit(KnowledgeToolkit);
       const server = yield* McpServer.McpServer;
-      expect(server.tools.length).toBe(36);
+      expect(server.tools.length).toBe(43);
       for (const { tool } of server.tools) expect(tool.inputSchema.type, tool.name).toBe("object");
     }).pipe(Effect.provide(registrationHandlers), Effect.provide(registered)),
   ),
@@ -236,6 +247,7 @@ it.effect("all added toolkits expose MCP-compatible object parameter schemas", (
       AutomationToolkit,
       MemoryToolkit,
       QualityRecordsToolkit,
+      KnowledgeToolkit,
     ]) {
       for (const tool of Object.values(toolkit.tools)) {
         const encoded = Tool.getJsonSchema(tool);

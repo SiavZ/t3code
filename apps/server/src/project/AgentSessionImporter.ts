@@ -169,6 +169,12 @@ export const importRecentAgentThreads = Effect.fn("importRecentAgentThreads")(fu
         `import:${thread.providerInstanceId}:${thread.providerSessionId}`,
       );
       const imported = yield* Effect.gen(function* () {
+        if (thread.source !== "claudeAgent" && thread.source !== "codex") {
+          return yield* new AgentSessionUnresumableSessionError({
+            source: thread.source,
+            providerSessionId: thread.providerSessionId,
+          });
+        }
         const provider = ProviderDriverKind.make(thread.source);
         const model = thread.model ?? DEFAULT_MODEL_BY_PROVIDER[provider] ?? DEFAULT_MODEL;
         const existingThread = yield* snapshots.getThreadDetailById(threadId);
