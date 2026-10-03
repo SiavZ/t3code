@@ -21,6 +21,7 @@ import * as QualityRecords from "../orchestration/QualityRecords.ts";
 import * as AgentDocuments from "../orchestration/AgentDocuments.ts";
 import * as DocumentLifecycle from "../orchestration/DocumentLifecycle.ts";
 import * as AgentDocumentAssets from "../orchestration/AgentDocumentAssets.ts";
+import * as ThreadRuntimeService from "../orchestration/ThreadRuntimeService.ts";
 import * as ProcessRunner from "../processRunner.ts";
 import { OrchestrationCommandReceiptRepositoryLive } from "../persistence/Layers/OrchestrationCommandReceipts.ts";
 
@@ -30,6 +31,7 @@ export const parityStartupDependenciesLayer = Layer.mergeAll(
   AmbientWork.layer,
   BackgroundJobs.layer.pipe(Layer.provide(BackgroundJobAuthority.layer)),
   DocumentLifecycle.layer,
+  ThreadRuntimeService.layer,
 ).pipe(
   Layer.provideMerge(AgentDocuments.layer),
   Layer.provideMerge(ScheduledWork.layer),

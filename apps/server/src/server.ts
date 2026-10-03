@@ -166,6 +166,7 @@ import * as OwnedWorkers from "./orchestration/OwnedWorkers.ts";
 import * as AgentDocuments from "./orchestration/AgentDocuments.ts";
 import * as DocumentLifecycle from "./orchestration/DocumentLifecycle.ts";
 import * as AgentDocumentAssets from "./orchestration/AgentDocumentAssets.ts";
+import * as ThreadRuntimeService from "./orchestration/ThreadRuntimeService.ts";
 import * as SharedWorkspaceActivity from "./workspace/SharedWorkspaceActivity.ts";
 import * as ExternalHistoryReaders from "./project/ExternalHistoryReaders.ts";
 import * as AgentSessionScanner from "./project/AgentSessionScanner.ts";
@@ -533,6 +534,7 @@ const ProviderRuntimeLayerLive = ProviderSessionReaperLive.pipe(
       QualityRecords.layer,
       AgentDocuments.layer,
       AgentDocumentAssets.layer,
+      ThreadRuntimeService.layer,
     ),
   ),
   Layer.provideMerge(ProviderLayerLive.pipe(Layer.provideMerge(SharedWorkspaceActivity.layer))),

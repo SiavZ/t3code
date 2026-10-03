@@ -1,4 +1,4 @@
-import { ThreadUnattendedAuthority } from "@t3tools/contracts";
+import { RuntimeThreadMetadata, ThreadUnattendedAuthority } from "@t3tools/contracts";
 import {
   AgentSessionImportSource,
   ApprovalRequestId,
@@ -148,6 +148,7 @@ const ProjectionThreadActivityIdRowSchema = Schema.Struct({
 });
 const ProjectionThreadSessionDbRowSchema = ProjectionThreadSession;
 const ProjectionThreadRuntimeContextDbRowSchema = Schema.Struct({
+  runtimeMetadata: Schema.NullOr(Schema.fromJsonString(RuntimeThreadMetadata)),
   titleState: Schema.NullOr(Schema.fromJsonString(ThreadTitleState)),
   id: ThreadId,
   projectId: ProjectId,
@@ -1347,6 +1348,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
     execute: ({ threadId }) =>
       sql`
         SELECT
+          runtime_metadata.metadata_json AS "runtimeMetadata",
           threads.thread_id AS id,
           threads.project_id AS "projectId",
           threads.title,
@@ -1362,6 +1364,8 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
         FROM projection_threads AS threads
         LEFT JOIN projection_thread_sessions AS sessions
           ON sessions.thread_id = threads.thread_id
+        LEFT JOIN projection_runtime_metadata AS runtime_metadata
+          ON runtime_metadata.thread_id = threads.thread_id
         WHERE threads.thread_id = ${threadId}
           AND threads.deleted_at IS NULL
           AND threads.archived_at IS NULL
@@ -1369,6 +1373,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
       `.pipe(
         Effect.map((rows) =>
           rows.map((row) => ({
+            runtimeMetadata: row.runtimeMetadata,
             id: row.id,
             projectId: row.projectId,
             title: row.title,
@@ -3569,6 +3574,7 @@ pending_approval_requests AS (
         ),
       );
       return Option.map(context, (row) => ({
+        ...row.runtimeMetadata,
         id: row.id,
         projectId: row.projectId,
         title: row.title,
@@ -3857,7 +3863,30 @@ pending_approval_requests AS (
         return Option.none<OrchestrationThread>();
       }
 
+      const runtimeRows = yield* sql<{
+        metadata_json: string;
+      }>`SELECT metadata_json FROM projection_runtime_metadata WHERE thread_id=${threadId}`.pipe(
+        Effect.mapError(
+          toPersistenceSqlOrDecodeError(
+            "ProjectionSnapshotQuery.runtime:query",
+            "ProjectionSnapshotQuery.runtime:decode",
+          ),
+        ),
+      );
+      const runtimeMetadata = runtimeRows[0]
+        ? yield* Schema.decodeUnknownEffect(Schema.fromJsonString(RuntimeThreadMetadata))(
+            runtimeRows[0].metadata_json,
+          ).pipe(
+            Effect.mapError(
+              toPersistenceSqlOrDecodeError(
+                "ProjectionSnapshotQuery.runtime:query",
+                "ProjectionSnapshotQuery.runtime:decode",
+              ),
+            ),
+          )
+        : {};
       const thread = {
+        ...runtimeMetadata,
         id: threadRow.value.threadId,
         projectId: threadRow.value.projectId,
         title: threadRow.value.title,

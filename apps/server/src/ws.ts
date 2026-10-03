@@ -78,6 +78,7 @@ import {
   type TerminalMetadataStreamEvent,
   type PullRequestRef,
   WS_METHODS,
+  RuntimeOperationError,
   WsRpcGroup,
   WsCoreRpcGroup,
   ParityToolsRpcGroup,
@@ -111,6 +112,7 @@ import * as OwnedWorkers from "./orchestration/OwnedWorkers.ts";
 import * as AgentDocuments from "./orchestration/AgentDocuments.ts";
 import * as AgentDocumentAssets from "./orchestration/AgentDocumentAssets.ts";
 import * as AmbientWork from "./orchestration/AmbientWork.ts";
+import * as ThreadRuntimeService from "./orchestration/ThreadRuntimeService.ts";
 import * as GlobalMemory from "./memory/GlobalMemory.ts";
 import * as Memory from "./memory/Memory.ts";
 import * as QualityRecords from "./orchestration/QualityRecords.ts";
@@ -166,7 +168,10 @@ import * as NewProject from "./project/NewProject.ts";
 import * as RepositoryIdentityResolver from "./project/RepositoryIdentityResolver.ts";
 import * as WorktreeSetupTracker from "./project/WorktreeSetupTracker.ts";
 import * as AgentSessionScanner from "./project/AgentSessionScanner.ts";
-import { importRecentAgentThreads } from "./project/AgentSessionImporter.ts";
+import {
+  importRecentAgentThreads,
+  importNormalizedHistory,
+} from "./project/AgentSessionImporter.ts";
 import * as ServerEnvironment from "./environment/ServerEnvironment.ts";
 import * as RemoteOpenTargets from "./environment/RemoteOpenTargets.ts";
 import * as BackgroundPolicy from "./background/BackgroundPolicy.ts";
@@ -548,6 +553,7 @@ const makeParityToolsRpcLayer = () =>
     Effect.gen(function* () {
       const documentAssets = yield* AgentDocumentAssets.AgentDocumentAssets;
       const ambientWork = yield* AmbientWork.AmbientWork;
+      const threadRuntime = yield* ThreadRuntimeService.ThreadRuntimeService;
       const memory = yield* Memory.MemoryService;
       const qualityRecords = yield* QualityRecords.QualityRecords;
       const scheduledWork = yield* ScheduledWork.ScheduledWork;
@@ -559,6 +565,8 @@ const makeParityToolsRpcLayer = () =>
       const skillManagement = yield* SkillManagement.SkillManagement;
       const externalMcp = yield* ExternalMcpConnections.ExternalMcpConnections;
       return ParityToolsRpcGroup.of({
+        [WS_METHODS.runtimeHandoff]: (input) => threadRuntime.handoff(input),
+        [WS_METHODS.runtimeFork]: (input) => threadRuntime.fork(input),
         [WS_METHODS.qualitySubscribeChanges]: (input) =>
           qualityRecords.subscribe(input, { threadId: input.threadId, source: "user-reported" }),
         [WS_METHODS.agentDocumentsPrepareAsset]: (input) => documentAssets.prepare(input),
@@ -607,6 +615,17 @@ const makeParityToolsRpcLayer = () =>
         [WS_METHODS.coordinationWrite]: (input) => coordinationPlans.write(input),
         [WS_METHODS.agentSearch]: (input) => agentSearch.search(input),
         [WS_METHODS.historySearch]: (input) => historySearch.search(input),
+        [WS_METHODS.historyImport]: (input) =>
+          importNormalizedHistory(input).pipe(
+            Effect.mapError((cause) =>
+              cause instanceof RuntimeOperationError
+                ? cause
+                : new RuntimeOperationError({
+                    code: "storage",
+                    detail: "Normalized history import could not be completed.",
+                  }),
+            ),
+          ),
         [WS_METHODS.historyRead]: (input) => historySearch.readHistory(input),
         [WS_METHODS.skillsList]: (input) => skillManagement.list(input),
         [WS_METHODS.skillsRead]: (input) => skillManagement.read(input),
@@ -4268,6 +4287,7 @@ export const websocketRpcRouteLayer = Layer.unwrap(
     const agentDocuments = yield* AgentDocuments.AgentDocuments;
     const documentAssets = yield* AgentDocumentAssets.AgentDocumentAssets;
     const ambientWork = yield* AmbientWork.AmbientWork;
+    const threadRuntime = yield* ThreadRuntimeService.ThreadRuntimeService;
     const globalMemory = yield* GlobalMemory.GlobalMemory;
     const memory = yield* Memory.MemoryService;
     const qualityRecords = yield* QualityRecords.QualityRecords;
@@ -4329,6 +4349,9 @@ export const websocketRpcRouteLayer = Layer.unwrap(
                   Layer.succeed(AgentDocumentAssets.AgentDocumentAssets, documentAssets),
                 ),
                 Layer.provide(Layer.succeed(AmbientWork.AmbientWork, ambientWork)),
+                Layer.provide(
+                  Layer.succeed(ThreadRuntimeService.ThreadRuntimeService, threadRuntime),
+                ),
                 Layer.provide(Layer.succeed(Memory.MemoryService, memory)),
                 Layer.provide(Layer.succeed(QualityRecords.QualityRecords, qualityRecords)),
                 Layer.provide(Layer.succeed(ScheduledWork.ScheduledWork, scheduledWork)),

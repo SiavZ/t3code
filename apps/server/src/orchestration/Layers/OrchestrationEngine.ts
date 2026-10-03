@@ -685,6 +685,8 @@ const makeOrchestrationEngine = Effect.gen(function* () {
           }
         }
         let workerStates =
+          currentCommand.type === "thread.runtime.handoff" ||
+          currentCommand.type === "thread.runtime.handoff.commit" ||
           currentCommand.type.startsWith("coordination.plan.") ||
           currentCommand.type === "thread.worker.spawn" ||
           currentCommand.type === "thread.worker.send" ||

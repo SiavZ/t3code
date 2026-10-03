@@ -18,6 +18,7 @@ import * as Quality from "./qualityRecords.ts";
 import * as Scheduled from "./scheduledWork.ts";
 import * as Jobs from "./backgroundJobs.ts";
 import * as Grants from "./unattendedGrants.ts";
+import * as Runtime from "./runtimeOperations.ts";
 import { ProjectId } from "./baseSchemas.ts";
 import {
   WorkerSpawnInput,
@@ -324,6 +325,8 @@ import { VcsError } from "./vcs.ts";
 export const WS_METHODS = {
   memoryGlobalRead: "memoryGlobal.read",
   memoryGlobalWrite: "memoryGlobal.write",
+  runtimeHandoff: "runtime.handoff",
+  runtimeFork: "runtime.fork",
   qualitySubscribeChanges: "quality.subscribeChanges",
   agentDocumentsPrepareAsset: "agentDocuments.prepareAsset",
   ambientConfigure: "ambient.configure",
@@ -360,6 +363,7 @@ export const WS_METHODS = {
   agentSearch: "agentSearch.search",
   historySearch: "history.search",
   historyRead: "history.read",
+  historyImport: "history.import",
   skillsList: "skills.list",
   skillsRead: "skills.read",
   skillsLoad: "skills.load",
@@ -1621,6 +1625,11 @@ export const IntegrationWorkflowRpcGroup = RpcGroup.make(
 // Parity tool RPCs live in their own group. One group holding every RPC exceeds the
 // compiler's instantiation depth in the server's handler layer.
 export const ParityToolsRpcGroup = RpcGroup.make(
+  Rpc.make(WS_METHODS.historyImport, {
+    payload: HistorySearch.HistoryImportInput,
+    success: HistorySearch.HistoryImportResult,
+    error: Schema.Union([Runtime.RuntimeOperationError, EnvironmentAuthorizationError]),
+  }),
   Rpc.make(WS_METHODS.coordinationMailboxRead, {
     payload: Coordination.CoordinationMailboxReadInput,
     success: Coordination.CoordinationMailbox,
@@ -1630,6 +1639,16 @@ export const ParityToolsRpcGroup = RpcGroup.make(
     payload: Coordination.CoordinationMailboxWriteInput,
     success: Coordination.CoordinationMailbox,
     error: Schema.Union([Coordination.CoordinationError, EnvironmentAuthorizationError]),
+  }),
+  Rpc.make(WS_METHODS.runtimeHandoff, {
+    payload: Runtime.RuntimeHandoffInput,
+    success: Runtime.RuntimeOperationReceipt,
+    error: Schema.Union([Runtime.RuntimeOperationError, EnvironmentAuthorizationError]),
+  }),
+  Rpc.make(WS_METHODS.runtimeFork, {
+    payload: Runtime.RuntimeForkInput,
+    success: Runtime.RuntimeOperationReceipt,
+    error: Schema.Union([Runtime.RuntimeOperationError, EnvironmentAuthorizationError]),
   }),
   Rpc.make(WS_METHODS.qualitySubscribeChanges, {
     payload: Quality.QualityReadInput,

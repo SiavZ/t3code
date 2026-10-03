@@ -1794,6 +1794,13 @@ const make = Effect.gen(function* () {
 
       const thread = yield* resolveThreadRuntimeContext(event.threadId);
       if (!thread) return;
+      // Native callbacks carry their creation epoch. A same-thread replacement
+      // must not give late events the new runtime's authority.
+      if (
+        thread.runtimeHandoff?.status === "pending" ||
+        thread.runtimeEpochId !== event.runtimeEpochId
+      )
+        return;
 
       if (Option.isSome(sharedWorkspaceActivity)) {
         yield* sharedWorkspaceActivity.value.record(event).pipe(

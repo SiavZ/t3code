@@ -6,6 +6,7 @@ import {
   ThreadId,
   TrimmedNonEmptyString,
 } from "./baseSchemas.ts";
+import { ModelSelection } from "./orchestration.ts";
 
 export const HistorySource = Schema.Literals([
   "t3",
@@ -38,6 +39,21 @@ export const HistoryReadInput = Schema.Struct({
   sourceRef: TrimmedNonEmptyString,
 });
 export type HistoryReadInput = typeof HistoryReadInput.Type;
+export const HistoryImportInput = Schema.Struct({
+  projectId: ProjectId,
+  sourceRef: TrimmedNonEmptyString,
+  targetModelSelection: ModelSelection,
+  operationId: TrimmedNonEmptyString,
+  mode: Schema.Literal("history-only"),
+});
+export type HistoryImportInput = typeof HistoryImportInput.Type;
+export const HistoryImportResult = Schema.Struct({
+  threadId: ThreadId,
+  mode: Schema.Literal("history-only"),
+  source: HistorySource,
+  nativeResume: Schema.Literal(false),
+});
+export type HistoryImportResult = typeof HistoryImportResult.Type;
 export const HistorySearchInput = Schema.Struct({
   projectId: ProjectId,
   query: Schema.String.check(Schema.isNonEmpty(), Schema.isMaxLength(256)),

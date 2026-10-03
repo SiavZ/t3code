@@ -1,4 +1,4 @@
-import { CoordinationMailbox } from "@t3tools/contracts";
+import { RuntimeThreadMetadata, CoordinationMailbox } from "@t3tools/contracts";
 import {
   ApprovalRequestId,
   isImportedAgentSessionMessageId,
@@ -632,6 +632,105 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
                   },
             updatedAt: event.payload.createdAt,
           });
+          return;
+        }
+        case "thread.runtime-handoff-requested": {
+          const rows = yield* sql<{
+            metadata_json: string;
+          }>`SELECT metadata_json FROM projection_runtime_metadata WHERE thread_id=${event.payload.threadId}`.pipe(
+            Effect.mapError(toPersistenceSqlError("runtime metadata projection")),
+          );
+          const metadata = {
+            ...(rows[0]
+              ? yield* Schema.decodeUnknownEffect(Schema.fromJsonString(RuntimeThreadMetadata))(
+                  rows[0].metadata_json,
+                ).pipe(Effect.mapError(toPersistenceSqlError("runtime metadata decode")))
+              : {}),
+            runtimeHandoff: event.payload.handoff,
+          };
+          yield* sql`INSERT INTO projection_runtime_metadata VALUES(${event.payload.threadId},${JSON.stringify(metadata)}) ON CONFLICT(thread_id) DO UPDATE SET metadata_json=excluded.metadata_json`.pipe(
+            Effect.mapError(toPersistenceSqlError("runtime metadata projection")),
+          );
+          const row = yield* projectionThreadRepository.getById({
+            threadId: event.payload.threadId,
+          });
+          if (Option.isSome(row))
+            yield* projectionThreadRepository.upsert({
+              ...row.value,
+              updatedAt: event.payload.updatedAt,
+            });
+          return;
+        }
+        case "thread.runtime-handoff-failed": {
+          const rows = yield* sql<{
+            metadata_json: string;
+          }>`SELECT metadata_json FROM projection_runtime_metadata WHERE thread_id=${event.payload.threadId}`.pipe(
+            Effect.mapError(toPersistenceSqlError("runtime metadata projection")),
+          );
+          const previous = rows[0]
+            ? yield* Schema.decodeUnknownEffect(Schema.fromJsonString(RuntimeThreadMetadata))(
+                rows[0].metadata_json,
+              ).pipe(Effect.mapError(toPersistenceSqlError("runtime metadata decode")))
+            : {};
+          if (previous.runtimeHandoff?.epochId === event.payload.epochId) {
+            yield* sql`UPDATE projection_runtime_metadata SET metadata_json=${JSON.stringify({ ...previous, runtimeHandoff: { ...previous.runtimeHandoff, status: "failed" } })} WHERE thread_id=${event.payload.threadId}`.pipe(
+              Effect.mapError(toPersistenceSqlError("runtime metadata projection")),
+            );
+          }
+          const row = yield* projectionThreadRepository.getById({
+            threadId: event.payload.threadId,
+          });
+          if (Option.isSome(row))
+            yield* projectionThreadRepository.upsert({
+              ...row.value,
+              updatedAt: event.payload.updatedAt,
+            });
+          return;
+        }
+        case "thread.runtime-handoff-committed": {
+          const rows = yield* sql<{
+            metadata_json: string;
+          }>`SELECT metadata_json FROM projection_runtime_metadata WHERE thread_id=${event.payload.threadId}`.pipe(
+            Effect.mapError(toPersistenceSqlError("runtime metadata projection")),
+          );
+          const previous = rows[0]
+            ? yield* Schema.decodeUnknownEffect(Schema.fromJsonString(RuntimeThreadMetadata))(
+                rows[0].metadata_json,
+              ).pipe(Effect.mapError(toPersistenceSqlError("runtime metadata decode")))
+            : {};
+          const metadata = {
+            ...previous,
+            runtimeEpochId: event.payload.epochId,
+            runtimeHandoff: previous.runtimeHandoff
+              ? { ...previous.runtimeHandoff, status: "committed" }
+              : null,
+          };
+          yield* sql`INSERT INTO projection_runtime_metadata VALUES(${event.payload.threadId},${JSON.stringify(metadata)}) ON CONFLICT(thread_id) DO UPDATE SET metadata_json=excluded.metadata_json`.pipe(
+            Effect.mapError(toPersistenceSqlError("runtime metadata projection")),
+          );
+          const row = yield* projectionThreadRepository.getById({
+            threadId: event.payload.threadId,
+          });
+          if (Option.isSome(row))
+            yield* projectionThreadRepository.upsert({
+              ...row.value,
+              modelSelection: event.payload.targetModelSelection,
+              updatedAt: event.payload.updatedAt,
+            });
+          return;
+        }
+        case "thread.runtime-forked": {
+          const metadata = {
+            runtimeEpochId: `fork:${event.payload.threadId}`,
+            forkProvenance: {
+              sourceThreadId: event.payload.sourceThreadId,
+              throughMessageId: event.payload.throughMessageId,
+              sourceMessageIds: event.payload.sourceMessageIds,
+            },
+          };
+          yield* sql`INSERT INTO projection_runtime_metadata VALUES(${event.payload.threadId},${JSON.stringify(metadata)}) ON CONFLICT(thread_id) DO UPDATE SET metadata_json=excluded.metadata_json`.pipe(
+            Effect.mapError(toPersistenceSqlError("runtime metadata projection")),
+          );
           return;
         }
         case "thread.created":
@@ -1384,7 +1483,7 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
     const applyThreadSessionsProjection: ProjectorDefinition["apply"] = Effect.fn(
       "applyThreadSessionsProjection",
     )(function* (event, _attachmentSideEffects) {
-      if (event.type === "thread.created") {
+      if (event.type === "thread.created" || event.type === "thread.runtime-handoff-committed") {
         yield* projectionThreadSessionRepository.deleteByThreadId({
           threadId: event.payload.threadId,
         });

@@ -70,6 +70,7 @@ import {
   type CoordinationPlan,
 } from "@t3tools/contracts";
 import type { WorkerThreadState } from "./Services/ProjectionSnapshotQuery.ts";
+import { runtimeHandoffDecision } from "./runtimeHandoffDecision.ts";
 
 const monogramSegmenter = new Intl.Segmenter(undefined, { granularity: "grapheme" });
 
@@ -2211,6 +2212,11 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         command,
         threadId: command.threadId,
       });
+      if (targetThread.runtimeHandoff?.status === "pending")
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: "A runtime handoff must finish or fail before accepting another turn.",
+        });
       if (targetThread.worker) {
         yield* requireWorkerChain(readModel, targetThread, "send");
         yield* requireWorkerAdmission(
@@ -2836,6 +2842,187 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
       };
     }
 
+    case "thread.runtime.handoff": {
+      const thread = yield* requireThread({ readModel, command, threadId: command.threadId });
+      const admission = runtimeHandoffDecision(thread, command.expectedUpdatedAt, {
+        pendingTurn: hasQueuedTurnStartForThread(thread, command.createdAt),
+        unresolvedApproval: openRequests(thread).size > 0,
+        unresolvedInput: false,
+        nativeBackgroundWork:
+          workerStates?.find((state) => state.thread.id === thread.id)?.thread.backgroundLiveness !=
+          null,
+        ownedWorkerActivation: [...(workerStates?.values() ?? [])].some(
+          (state) =>
+            state.thread.worker?.ownerThreadId === thread.id &&
+            (state.pendingMessageId !== null ||
+              state.thread.session?.status === "running" ||
+              state.thread.session?.status === "starting"),
+        ),
+      });
+      if (admission || thread.runtimeHandoff?.status === "pending")
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: admission?.detail ?? "A runtime handoff is already pending.",
+        });
+      return {
+        ...(yield* withEventBase({
+          aggregateKind: "thread",
+          aggregateId: thread.id,
+          occurredAt: command.createdAt,
+          commandId: command.commandId,
+        })),
+        type: "thread.runtime-handoff-requested",
+        payload: {
+          threadId: thread.id,
+          handoff: {
+            operationId: command.operationId,
+            epochId: command.epochId,
+            status: "pending",
+            targetModelSelection: command.targetModelSelection,
+            seed: command.seed,
+            requestedAt: command.createdAt,
+          },
+          updatedAt: command.createdAt,
+        },
+      };
+    }
+    case "thread.runtime.handoff.commit": {
+      const thread = yield* requireThread({ readModel, command, threadId: command.threadId });
+      if (
+        thread.runtimeHandoff?.status !== "pending" ||
+        thread.runtimeHandoff.epochId !== command.expectedEpochId ||
+        (thread.session !== null && thread.session.status !== "stopped") ||
+        openRequests(thread).size > 0 ||
+        hasQueuedTurnStartForThread(thread, command.createdAt)
+      )
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: "Handoff epoch changed or native stop has not been acknowledged.",
+        });
+      return {
+        ...(yield* withEventBase({
+          aggregateKind: "thread",
+          aggregateId: thread.id,
+          occurredAt: command.createdAt,
+          commandId: command.commandId,
+        })),
+        type: "thread.runtime-handoff-committed",
+        payload: {
+          threadId: thread.id,
+          epochId: command.expectedEpochId,
+          targetModelSelection: thread.runtimeHandoff.targetModelSelection,
+          updatedAt: command.createdAt,
+        },
+      };
+    }
+    case "thread.runtime.handoff.fail": {
+      const thread = yield* requireThread({ readModel, command, threadId: command.threadId });
+      if (
+        thread.runtimeHandoff?.status !== "pending" ||
+        thread.runtimeHandoff.epochId !== command.expectedEpochId
+      )
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: "Pending handoff epoch changed before failure acknowledgement.",
+        });
+      return {
+        ...(yield* withEventBase({
+          aggregateKind: "thread",
+          aggregateId: thread.id,
+          occurredAt: command.createdAt,
+          commandId: command.commandId,
+        })),
+        type: "thread.runtime-handoff-failed",
+        payload: {
+          threadId: thread.id,
+          epochId: command.expectedEpochId,
+          updatedAt: command.createdAt,
+        },
+      };
+    }
+    case "thread.runtime.fork": {
+      const source = yield* requireThread({ readModel, command, threadId: command.sourceThreadId });
+      const orderedMessages = source.messages.toSorted(
+        (a, b) => a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id),
+      );
+      const boundary = orderedMessages.findIndex(
+        (message) => message.id === command.throughMessageId,
+      );
+      if (
+        source.updatedAt !== command.expectedUpdatedAt ||
+        source.deletedAt !== null ||
+        boundary < 0 ||
+        orderedMessages[boundary]?.streaming ||
+        (orderedMessages[boundary]?.role !== "user" &&
+          orderedMessages[boundary]?.role !== "assistant")
+      )
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: "Fork source changed or cut point is not a completed visible message.",
+        });
+      const messages = orderedMessages
+        .slice(0, boundary + 1)
+        .filter((message) => message.role === "user" || message.role === "assistant");
+      if (
+        messages.length > 2000 ||
+        messages.reduce((size, message) => size + message.text.length, 0) > 4_194_304
+      )
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: "Fork history exceeds the bounded import limit.",
+        });
+      const events = yield* decideCommandSequence({
+        readModel,
+        commands: [
+          {
+            type: "thread.create",
+            commandId: command.commandId,
+            threadId: command.threadId,
+            projectId: source.projectId,
+            title: command.title,
+            modelSelection: command.modelSelection,
+            runtimeMode: source.runtimeMode,
+            interactionMode: source.interactionMode,
+            branch: source.branch,
+            worktreePath: source.worktreePath,
+            createdAt: command.createdAt,
+            historyImport: true,
+          },
+          {
+            type: "thread.history.import",
+            commandId: command.commandId,
+            threadId: command.threadId,
+            messages: messages.map((message, index) => ({
+              messageId: MessageId.make(
+                `import:fork:${command.threadId}:${String(index).padStart(6, "0")}`,
+              ),
+              role: message.role === "user" ? ("user" as const) : ("assistant" as const),
+              text: message.text,
+              createdAt: message.createdAt,
+            })),
+          },
+        ],
+      });
+      return [
+        ...events,
+        {
+          ...(yield* withEventBase({
+            aggregateKind: "thread",
+            aggregateId: command.threadId,
+            occurredAt: command.createdAt,
+            commandId: command.commandId,
+          })),
+          type: "thread.runtime-forked" as const,
+          payload: {
+            threadId: command.threadId,
+            sourceThreadId: source.id,
+            throughMessageId: command.throughMessageId,
+            sourceMessageIds: messages.map((message) => message.id),
+            updatedAt: command.createdAt,
+          },
+        },
+      ];
+    }
     case "thread.history.import": {
       const thread = yield* requireThread({
         readModel,

@@ -147,6 +147,7 @@ export const OPTIONAL_AGENT_TOOL_CAPABILITIES = [
   "agent-documents",
   "knowledge",
   "external-mcp",
+  "runtime-tools",
 ] as const;
 export const OptionalAgentToolCapability = Schema.Literals(OPTIONAL_AGENT_TOOL_CAPABILITIES);
 export type OptionalAgentToolCapability = typeof OptionalAgentToolCapability.Type;
@@ -843,6 +844,15 @@ export const ThreadPullRequestLink = Schema.Struct({
 export type ThreadPullRequestLink = typeof ThreadPullRequestLink.Type;
 
 export const OrchestrationThread = Schema.Struct({
+  runtimeHandoff: Schema.optional(Schema.NullOr(Schema.suspend(() => RuntimeHandoffState))),
+  runtimeEpochId: Schema.optional(TrimmedNonEmptyString),
+  forkProvenance: Schema.optional(
+    Schema.Struct({
+      sourceThreadId: ThreadId,
+      throughMessageId: MessageId,
+      sourceMessageIds: Schema.Array(MessageId),
+    }),
+  ),
   id: ThreadId,
   worker: Schema.optional(Schema.NullOr(ThreadWorkerMetadata)),
   projectId: ProjectId,
@@ -1599,6 +1609,72 @@ const ThreadMessageReasoningCompleteCommand = Schema.Struct({
   createdAt: IsoDateTime,
 });
 
+const RuntimeSeed = Schema.Struct({
+  text: Schema.String.check(Schema.isMaxLength(65536)),
+  sourceMessageIds: Schema.Array(MessageId).check(Schema.isMaxLength(256)),
+  omittedMessages: NonNegativeInt,
+  omittedAttachments: NonNegativeInt,
+  hiddenStatePreserved: Schema.Literal(false),
+});
+export const RuntimeHandoffState = Schema.Struct({
+  operationId: TrimmedNonEmptyString,
+  epochId: TrimmedNonEmptyString,
+  status: Schema.Literals(["pending", "committed", "failed"]),
+  targetModelSelection: ModelSelection,
+  seed: RuntimeSeed,
+  requestedAt: IsoDateTime,
+});
+export const RuntimeThreadMetadata = Schema.Struct({
+  runtimeHandoff: Schema.optional(Schema.NullOr(RuntimeHandoffState)),
+  runtimeEpochId: Schema.optional(TrimmedNonEmptyString),
+  forkProvenance: Schema.optional(
+    Schema.Struct({
+      sourceThreadId: ThreadId,
+      throughMessageId: MessageId,
+      sourceMessageIds: Schema.Array(MessageId),
+    }),
+  ),
+});
+const ThreadRuntimeHandoffCommand = Schema.Struct({
+  type: Schema.Literal("thread.runtime.handoff"),
+  commandId: CommandId,
+  threadId: ThreadId,
+  operationId: TrimmedNonEmptyString,
+  expectedUpdatedAt: IsoDateTime,
+  epochId: TrimmedNonEmptyString,
+  targetModelSelection: ModelSelection,
+  seed: RuntimeSeed,
+  createdAt: IsoDateTime,
+});
+const ThreadRuntimeHandoffCommitCommand = Schema.Struct({
+  type: Schema.Literal("thread.runtime.handoff.commit"),
+  commandId: CommandId,
+  threadId: ThreadId,
+  expectedEpochId: TrimmedNonEmptyString,
+  expectedNativeSessionId: Schema.NullOr(Schema.String),
+  acknowledgedStopped: Schema.Literal(true),
+  createdAt: IsoDateTime,
+});
+const ThreadRuntimeHandoffFailCommand = Schema.Struct({
+  type: Schema.Literal("thread.runtime.handoff.fail"),
+  commandId: CommandId,
+  threadId: ThreadId,
+  expectedEpochId: TrimmedNonEmptyString,
+  createdAt: IsoDateTime,
+});
+const ThreadRuntimeForkCommand = Schema.Struct({
+  type: Schema.Literal("thread.runtime.fork"),
+  commandId: CommandId,
+  sourceThreadId: ThreadId,
+  expectedUpdatedAt: IsoDateTime,
+  operationId: TrimmedNonEmptyString,
+  threadId: ThreadId,
+  throughMessageId: MessageId,
+  title: TrimmedNonEmptyString,
+  modelSelection: ModelSelection,
+  createdAt: IsoDateTime,
+});
+
 const ThreadHistoryImportCommand = Schema.Struct({
   type: Schema.Literal("thread.history.import"),
   commandId: CommandId,
@@ -1819,6 +1895,10 @@ const InternalOrchestrationCommand = Schema.Union([
   ThreadMessageAssistantCompleteCommand,
   ThreadMessageReasoningDeltaCommand,
   ThreadMessageReasoningCompleteCommand,
+  ThreadRuntimeHandoffCommand,
+  ThreadRuntimeHandoffCommitCommand,
+  ThreadRuntimeHandoffFailCommand,
+  ThreadRuntimeForkCommand,
   ThreadHistoryImportCommand,
   ThreadMessageUserAppendCommand,
   ThreadProposedPlanUpsertCommand,
@@ -1841,6 +1921,10 @@ export type OrchestrationCommand = typeof OrchestrationCommand.Type;
 
 export const OrchestrationEventType = Schema.Literals([
   "coordination.mailbox.updated",
+  "thread.runtime-handoff-requested",
+  "thread.runtime-handoff-committed",
+  "thread.runtime-handoff-failed",
+  "thread.runtime-forked",
   "coordination.plan.updated",
   "project.created",
   "project.meta-updated",
@@ -2244,6 +2328,45 @@ export const OrchestrationEvent = Schema.Union([
     ...EventBaseFields,
     type: Schema.Literal("thread.deleted"),
     payload: ThreadDeletedPayload,
+  }),
+  Schema.Struct({
+    ...EventBaseFields,
+    type: Schema.Literal("thread.runtime-handoff-requested"),
+    payload: Schema.Struct({
+      threadId: ThreadId,
+      handoff: RuntimeHandoffState,
+      updatedAt: IsoDateTime,
+    }),
+  }),
+  Schema.Struct({
+    ...EventBaseFields,
+    type: Schema.Literal("thread.runtime-handoff-committed"),
+    payload: Schema.Struct({
+      threadId: ThreadId,
+      epochId: TrimmedNonEmptyString,
+      targetModelSelection: ModelSelection,
+      updatedAt: IsoDateTime,
+    }),
+  }),
+  Schema.Struct({
+    ...EventBaseFields,
+    type: Schema.Literal("thread.runtime-handoff-failed"),
+    payload: Schema.Struct({
+      threadId: ThreadId,
+      epochId: TrimmedNonEmptyString,
+      updatedAt: IsoDateTime,
+    }),
+  }),
+  Schema.Struct({
+    ...EventBaseFields,
+    type: Schema.Literal("thread.runtime-forked"),
+    payload: Schema.Struct({
+      threadId: ThreadId,
+      sourceThreadId: ThreadId,
+      throughMessageId: MessageId,
+      sourceMessageIds: Schema.Array(MessageId),
+      updatedAt: IsoDateTime,
+    }),
   }),
   Schema.Struct({
     ...EventBaseFields,

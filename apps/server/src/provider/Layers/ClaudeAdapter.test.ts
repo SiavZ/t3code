@@ -7723,6 +7723,59 @@ describe("ClaudeAdapterLive", () => {
     );
   });
 
+  it.effect("retains the old native callback epoch after same-thread replacement", () => {
+    const harness = makeHarness({ getSessionMessages: async () => [] });
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      yield* adapter.startSession({
+        threadId: THREAD_ID,
+        runtimeMode: "approval-required",
+        runtimeEpochId: "old-native",
+      });
+      const oldEvents = yield* Stream.take(adapter.streamEvents, 3).pipe(Stream.runCollect);
+      assert.isTrue(oldEvents.every((event) => event.runtimeEpochId === "old-native"));
+      const oldCallback = harness.getLastCreateQueryInput()?.options.canUseTool;
+      assert.isDefined(oldCallback);
+      if (!oldCallback) return;
+      const captured = yield* Deferred.make<void>();
+      const release = yield* Deferred.make<void>();
+      const callbackFiber = yield* Effect.gen(function* () {
+        yield* Deferred.succeed(captured, undefined);
+        yield* Deferred.await(release);
+        const controller = new AbortController();
+        controller.abort();
+        return yield* Effect.promise(() =>
+          oldCallback(
+            "Bash",
+            { command: "echo old" },
+            {
+              signal: controller.signal,
+              requestId: "old-request",
+              toolUseID: "old-tool",
+            },
+          ),
+        );
+      }).pipe(Effect.forkChild);
+      yield* Deferred.await(captured);
+      yield* adapter.startSession({
+        threadId: THREAD_ID,
+        runtimeMode: "approval-required",
+        runtimeEpochId: "new-native",
+      });
+      const replacementEvents = yield* Stream.take(adapter.streamEvents, 3).pipe(Stream.runCollect);
+      assert.isTrue(replacementEvents.every((event) => event.runtimeEpochId === "new-native"));
+      yield* Deferred.succeed(release, undefined);
+      const lateEvents = yield* Stream.take(adapter.streamEvents, 2).pipe(Stream.runCollect);
+      yield* Fiber.join(callbackFiber);
+      assert.deepEqual(
+        lateEvents.map((event) => event.type),
+        ["request.opened", "request.resolved"],
+      );
+      assert.isTrue(lateEvents.every((event) => event.runtimeEpochId === "old-native"));
+      assert.equal((yield* adapter.listSessions())[0]?.runtimeEpochId, "new-native");
+    }).pipe(Effect.provide(harness.layer));
+  });
+
   it.effect("captures ExitPlanMode as a proposed plan and denies auto-exit", () => {
     const harness = makeHarness();
     return Effect.gen(function* () {

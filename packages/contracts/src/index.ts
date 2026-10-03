@@ -40,6 +40,7 @@ export * from "./agentSearch.ts";
 export * from "./historySearch.ts";
 export * from "./externalMcp.ts";
 export * from "./skillManagement.ts";
+export * from "./runtimeOperations.ts";
 export * from "./t3ProjectFile.ts";
 export * from "./editor.ts";
 export * from "./project.ts";

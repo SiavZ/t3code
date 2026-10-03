@@ -74,6 +74,9 @@ import { VcsStatusBroadcaster } from "../../vcs/VcsStatusBroadcaster.ts";
 import { GitWorkflowService } from "../../git/GitWorkflowService.ts";
 import * as TerminalManager from "../../terminal/Manager.ts";
 import { makeMemoryTurnContext } from "../../memory/MemoryTurnContext.ts";
+import { ThreadRuntimeService } from "../ThreadRuntimeService.ts";
+import { clearStoppedRuntimeBinding } from "../../provider/Layers/ProviderSessionDirectory.ts";
+import { ProviderSessionRuntimeRepository } from "../../persistence/ProviderSessionRuntime.ts";
 const isProviderAdapterProcessError = Schema.is(ProviderAdapterProcessError);
 const isProviderAdapterRequestError = Schema.is(ProviderAdapterRequestError);
 const isProviderAdapterValidationError = Schema.is(ProviderAdapterValidationError);
@@ -86,6 +89,7 @@ type ProviderIntentEvent = Extract<
     type:
       | "thread.meta-updated"
       | "thread.runtime-mode-set"
+      | "thread.runtime-handoff-requested"
       | "thread.turn-start-requested"
       | "thread.turn-interrupt-requested"
       | "thread.approval-response-requested"
@@ -234,6 +238,8 @@ const make = Effect.gen(function* () {
   const textGeneration = yield* TextGeneration;
   const serverSettingsService = yield* ServerSettingsService;
   const memoryTurnContext = yield* makeMemoryTurnContext;
+  const runtimeService = yield* Effect.serviceOption(ThreadRuntimeService);
+  const runtimeRepository = yield* Effect.serviceOption(ProviderSessionRuntimeRepository);
   const terminalManager = yield* TerminalManager.TerminalManager;
   /** Environment settings with the thread's project overrides applied. */
   const projectSettingsForThread = Effect.fnUntraced(function* (threadId: ThreadId) {
@@ -621,6 +627,16 @@ const make = Effect.gen(function* () {
       capturedAuthority.value.authority.runtimeModeCeiling === "approval-required"
         ? "approval-required"
         : thread.runtimeMode;
+    const runtimeMetadata = Option.isSome(runtimeService)
+      ? yield* runtimeService.value.metadata(threadId)
+      : undefined;
+    if (runtimeMetadata?.runtimeHandoff?.status === "pending") {
+      return yield* new ProviderAdapterRequestError({
+        provider: providerErrorLabel(thread.session?.providerName ?? undefined),
+        method: "thread.turn.start",
+        detail: "A runtime handoff is awaiting native stop acknowledgement.",
+      });
+    }
     const requestedModelSelection = options?.modelSelection;
     const resolveActiveSession = (threadId: ThreadId) =>
       providerService
@@ -781,6 +797,9 @@ const make = Effect.gen(function* () {
             modelSelection: desiredModelSelection,
             ...(input?.resumeCursor !== undefined ? { resumeCursor: input.resumeCursor } : {}),
             runtimeMode: desiredRuntimeMode,
+            ...(runtimeMetadata?.runtimeEpochId !== undefined
+              ? { runtimeEpochId: runtimeMetadata.runtimeEpochId }
+              : {}),
           })
           .pipe(Effect.tap(() => refreshWorkspaceSnapshot));
       });
@@ -913,7 +932,15 @@ const make = Effect.gen(function* () {
       threadModelSelections.set(input.threadId, input.modelSelection);
     }
     const memoryInput = yield* memoryTurnContext(input.threadId, input.messageText);
-    const normalizedInput = toNonEmptyProviderInput(memoryInput);
+    const preparedSeed =
+      Option.isSome(runtimeService) && input.activationMessageId
+        ? yield* runtimeService.value.prepareContext({
+            threadId: input.threadId,
+            turnKey: input.activationMessageId,
+            messageText: memoryInput,
+          })
+        : { messageText: memoryInput, epochId: null };
+    const normalizedInput = toNonEmptyProviderInput(preparedSeed.messageText);
     const normalizedAttachments = input.attachments ?? [];
     const activeSession = yield* providerService
       .listSessions()
@@ -944,6 +971,7 @@ const make = Effect.gen(function* () {
         : input.modelSelection;
 
     return {
+      runtimeSeedEpochId: preparedSeed.epochId,
       threadId: input.threadId,
       ...(normalizedInput ? { input: normalizedInput } : {}),
       ...(normalizedAttachments.length > 0 ? { attachments: normalizedAttachments } : {}),
@@ -1597,7 +1625,15 @@ const make = Effect.gen(function* () {
           (!current || event.sequence <= (current.worker?.lastStopSequence ?? -1))
         )
           return;
-        yield* providerService.sendTurn(sendTurnRequest.value);
+        const { runtimeSeedEpochId, ...nativeRequest } = sendTurnRequest.value;
+        yield* providerService.sendTurn(nativeRequest);
+        if (runtimeSeedEpochId !== null && Option.isSome(runtimeService)) {
+          yield* runtimeService.value.acknowledgeSeed({
+            threadId: event.payload.threadId,
+            turnKey: event.payload.messageId,
+            epochId: runtimeSeedEpochId,
+          });
+        }
       }).pipe(Effect.asVoid, Effect.catchCause(recoverTurnStartFailure)),
     );
     // The forked send settles `sent` from here on, so drop the entry the post-processing hook uses.
@@ -1958,6 +1994,56 @@ const make = Effect.gen(function* () {
       eventType: event.type,
     });
     switch (event.type) {
+      case "thread.runtime-handoff-requested": {
+        if (Option.isNone(runtimeService))
+          return yield* Effect.die(new Error("Runtime service is not installed."));
+        const metadata = yield* runtimeService.value.metadata(event.payload.threadId);
+        if (
+          metadata.runtimeHandoff?.epochId !== event.payload.handoff.epochId ||
+          metadata.runtimeHandoff.status !== "pending"
+        )
+          return;
+        yield* providerService.getInstanceInfo(
+          event.payload.handoff.targetModelSelection.instanceId,
+        );
+        yield* providerService.stopSession({ threadId: event.payload.threadId });
+        const thread = yield* resolveThreadShell(event.payload.threadId);
+        if (thread?.session) {
+          yield* setThreadSession({
+            threadId: thread.id,
+            session: {
+              ...thread.session,
+              status: "stopped",
+              activeTurnId: null,
+              updatedAt: event.payload.updatedAt,
+            },
+            createdAt: event.payload.updatedAt,
+          });
+        }
+        if (Option.isNone(runtimeRepository))
+          return yield* Effect.die(new Error("Runtime binding repository is not installed."));
+        yield* clearStoppedRuntimeBinding(event.payload.threadId).pipe(
+          Effect.provideService(ProviderSessionRuntimeRepository, runtimeRepository.value),
+        );
+        yield* orchestrationEngine.dispatch({
+          type: "thread.runtime.handoff.commit",
+          commandId: CommandId.make(`runtime-commit:${event.payload.handoff.epochId}`),
+          threadId: event.payload.threadId,
+          expectedEpochId: event.payload.handoff.epochId,
+          expectedNativeSessionId: null,
+          acknowledgedStopped: true,
+          createdAt: event.payload.updatedAt,
+        });
+        threadModelSelections.delete(event.payload.threadId);
+        yield* ensureSessionForThread(event.payload.threadId, event.payload.updatedAt);
+        yield* runtimeService.value.recordHandoffStatus(
+          event.payload.threadId,
+          event.payload.handoff.operationId,
+          "completed",
+          "Native stop acknowledged and fresh epoch started. Visible history remains a bounded pending seed.",
+        );
+        return;
+      }
       case "thread.deleted": {
         const sends = workerSends.get(event.payload.threadId);
         const metadata = yield* projectionSnapshotQuery.getWorkerSpawnMetadata(
@@ -2050,6 +2136,33 @@ const make = Effect.gen(function* () {
         if (Cause.hasInterruptsOnly(cause)) {
           return Effect.interrupt;
         }
+        if (event.type === "thread.runtime-handoff-requested" && Option.isSome(runtimeService)) {
+          return Effect.gen(function* () {
+            const metadata = yield* runtimeService.value.metadata(event.payload.threadId);
+            if (
+              metadata.runtimeHandoff?.status === "pending" &&
+              metadata.runtimeHandoff.epochId === event.payload.handoff.epochId
+            ) {
+              yield* orchestrationEngine.dispatch({
+                type: "thread.runtime.handoff.fail",
+                commandId: CommandId.make(`runtime-failed:${event.payload.handoff.epochId}`),
+                threadId: event.payload.threadId,
+                expectedEpochId: event.payload.handoff.epochId,
+                createdAt: event.payload.updatedAt,
+              });
+            }
+            yield* runtimeService.value.recordHandoffStatus(
+              event.payload.threadId,
+              event.payload.handoff.operationId,
+              "failed",
+              "Native runtime transition failed. No hidden state transfer was claimed. Retry with a new operation after resolving the provider prerequisite.",
+            );
+          }).pipe(
+            Effect.catchCause(() =>
+              Effect.logWarning("Runtime handoff failure receipt could not be persisted."),
+            ),
+          );
+        }
         return Effect.logWarning("provider command reactor failed to process event", {
           eventType: event.type,
           cause: Cause.pretty(cause),
@@ -2078,6 +2191,7 @@ const make = Effect.gen(function* () {
             event.payload.titleState?.needsRefinement === true)) ||
         (event.type === "thread.session-set" && event.payload.session.status === "ready") ||
         event.type === "thread.runtime-mode-set" ||
+        event.type === "thread.runtime-handoff-requested" ||
         event.type === "thread.turn-start-requested" ||
         event.type === "thread.turn-interrupt-requested" ||
         event.type === "thread.approval-response-requested" ||

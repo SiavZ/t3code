@@ -171,6 +171,7 @@ type CodexThreadItem =
   EffectCodexSchema.V2ThreadReadResponse["thread"]["turns"][number]["items"][number];
 
 export interface CodexSessionRuntimeOptions {
+  readonly runtimeEpochId?: string | undefined;
   readonly threadId: ThreadId;
   readonly providerInstanceId?: ProviderInstanceId;
   readonly binaryPath: string;
@@ -1379,6 +1380,7 @@ export const makeCodexSessionRuntime = (
 
     const sessionCreatedAt = yield* nowIso;
     const initialSession = {
+      runtimeEpochId: options.runtimeEpochId,
       provider: PROVIDER,
       ...(options.providerInstanceId ? { providerInstanceId: options.providerInstanceId } : {}),
       status: "connecting",
@@ -1391,7 +1393,9 @@ export const makeCodexSessionRuntime = (
       updatedAt: sessionCreatedAt,
     } satisfies ProviderSession;
     const sessionRef = yield* Ref.make<ProviderSession>(initialSession);
-    const offerEvent = (event: ProviderEvent) => Queue.offer(events, event).pipe(Effect.asVoid);
+    // Capture the native session's origin, never the current thread's session map.
+    const offerEvent = (event: ProviderEvent) =>
+      Queue.offer(events, { ...event, runtimeEpochId: options.runtimeEpochId }).pipe(Effect.asVoid);
 
     const emitEvent = (event: Omit<ProviderEvent, "id" | "provider" | "createdAt">) =>
       Effect.gen(function* () {

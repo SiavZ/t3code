@@ -33,6 +33,7 @@ import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
 
 import * as ServerConfig from "./config.ts";
+import * as ThreadRuntimeService from "./orchestration/ThreadRuntimeService.ts";
 import * as AgentDocuments from "./orchestration/AgentDocuments.ts";
 import * as CoordinationReactor from "./orchestration/CoordinationReactor.ts";
 import * as ScheduledWork from "./orchestration/ScheduledWork.ts";
@@ -966,6 +967,7 @@ export const make = (options?: StartupOptions) =>
     const providerSessionDirectory = yield* ProviderSessionDirectory.ProviderSessionDirectory;
     const coordinationReactor = yield* CoordinationReactor.CoordinationReactor;
     const agentDocuments = yield* AgentDocuments.AgentDocuments;
+    const threadRuntime = yield* ThreadRuntimeService.ThreadRuntimeService;
     const scheduledWork = yield* ScheduledWork.ScheduledWork;
     const ambientWork = yield* AmbientWork.AmbientWork;
     const backgroundJobs = yield* BackgroundJobs.BackgroundJobs;
@@ -1019,6 +1021,8 @@ export const make = (options?: StartupOptions) =>
           ),
         ),
       );
+
+      yield* runStartupPhase("thread-runtime.recover", threadRuntime.recoverPending());
 
       yield* Effect.logDebug("startup phase: parking orchestration roots at activation");
       yield* runStartupPhase(

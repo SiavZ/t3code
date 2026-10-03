@@ -74,6 +74,7 @@ export const parityOperations = {
   search: {
     workspace: unary(WS_METHODS.agentSearch),
     history: unary(WS_METHODS.historySearch),
+    importHistory: unary(WS_METHODS.historyImport),
     readHistory: unary(WS_METHODS.historyRead),
   },
   skills: {
@@ -92,5 +93,9 @@ export const parityOperations = {
     search: unary(WS_METHODS.externalMcpSearch),
     call: unary(WS_METHODS.externalMcpCall),
     cancel: unary(WS_METHODS.externalMcpCancel),
+  },
+  runtime: {
+    handoff: unary(WS_METHODS.runtimeHandoff),
+    fork: unary(WS_METHODS.runtimeFork),
   },
 };

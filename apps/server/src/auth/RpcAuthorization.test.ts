@@ -54,8 +54,11 @@ describe("RPC authorization scopes", () => {
       WS_METHODS.backgroundJobStart,
       WS_METHODS.backgroundJobCancel,
       WS_METHODS.backgroundJobSubscribe,
+      WS_METHODS.historyImport,
       WS_METHODS.skillsLoad,
       WS_METHODS.externalMcpCall,
+      WS_METHODS.runtimeHandoff,
+      WS_METHODS.runtimeFork,
     ])
       expect(requiredScopeForRpcMethod(method)).toBe(AuthOrchestrationOperateScope);
   });

@@ -1067,7 +1067,7 @@ export const ProjectSettingsOverrides = Schema.Struct({
   enableAgentBrowserAccess: Schema.optionalKey(Schema.Boolean),
   enableAgentDeviceAccess: Schema.optionalKey(Schema.Boolean),
   agentToolCapabilities: Schema.optionalKey(
-    Schema.Array(OptionalAgentToolCapability).check(Schema.isMaxLength(7)),
+    Schema.Array(OptionalAgentToolCapability).check(Schema.isMaxLength(8)),
   ),
   enableMemoryAutoRecall: Schema.optionalKey(Schema.Boolean),
   textGenerationModelSelection: Schema.optionalKey(ModelSelection),
@@ -1152,7 +1152,7 @@ export const ServerSettings = Schema.Struct({
    */
   enableAgentBrowserAccess: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
   agentToolCapabilities: Schema.Array(OptionalAgentToolCapability)
-    .check(Schema.isMaxLength(7))
+    .check(Schema.isMaxLength(8))
     .pipe(Schema.withDecodingDefault(Effect.succeed([]))),
   enableMemoryAutoRecall: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
   projectAgentBrowserAccessOverrides: Schema.Record(ProjectId, Schema.Boolean).pipe(
@@ -1522,7 +1522,7 @@ export const ServerSettingsPatch = Schema.Struct({
   continueThreadsAfterServerUpdate: Schema.optionalKey(Schema.Boolean),
   enableAgentBrowserAccess: Schema.optionalKey(Schema.Boolean),
   agentToolCapabilities: Schema.optionalKey(
-    Schema.Array(OptionalAgentToolCapability).check(Schema.isMaxLength(7)),
+    Schema.Array(OptionalAgentToolCapability).check(Schema.isMaxLength(8)),
   ),
   enableMemoryAutoRecall: Schema.optionalKey(Schema.Boolean),
   projectAgentBrowserAccessOverrides: Schema.optionalKey(

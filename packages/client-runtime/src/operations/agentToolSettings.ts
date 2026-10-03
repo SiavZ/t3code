@@ -34,6 +34,10 @@ export const OPTIONAL_AGENT_TOOL_DETAILS: Record<
     description: "Search workspace code, conversation history and provider skills.",
   },
   "external-mcp": { label: "External MCP", description: "Connect and invoke external MCP tools." },
+  "runtime-tools": {
+    label: "Runtime tools",
+    description: "Inspect and manage agent runtime operations.",
+  },
 };
 
 /** Change one flag using each target's effective value, never a representative's array. */

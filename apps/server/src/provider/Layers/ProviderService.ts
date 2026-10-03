@@ -413,6 +413,7 @@ function toRuntimePayloadFromSession(
   },
 ): Record<string, unknown> {
   return {
+    runtimeEpochId: session.runtimeEpochId ?? null,
     cwd: session.cwd ?? null,
     model: session.model ?? null,
     activeTurnId: session.activeTurnId ?? null,
@@ -632,6 +633,35 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
     nativeLifecycle(threadId).unacknowledgedStop
       ? toValidationError(operation, "Previous native session stop was not acknowledged.")
       : Effect.void;
+  const requireRuntimeEpoch = (
+    threadId: ThreadId,
+    runtimeEpochId: string | undefined,
+    operation: string,
+  ) =>
+    Effect.gen(function* () {
+      if (Option.isNone(projectionQuery)) {
+        if (runtimeEpochId !== undefined)
+          return yield* toValidationError(operation, "Could not verify provider runtime epoch.");
+        return;
+      }
+      const current = yield* projectionQuery.value
+        .getThreadRuntimeContext(threadId)
+        .pipe(
+          Effect.mapError((cause) =>
+            toValidationError(operation, "Could not verify provider runtime epoch.", cause),
+          ),
+        );
+      if (
+        (Option.isNone(current) && runtimeEpochId !== undefined) ||
+        (Option.isSome(current) &&
+          (current.value.runtimeHandoff?.status === "pending" ||
+            current.value.runtimeEpochId !== runtimeEpochId))
+      )
+        return yield* toValidationError(
+          operation,
+          "Provider runtime epoch changed or handoff is pending.",
+        );
+    });
   // Called only while holding the thread lifecycle permit, before a replacement can start.
   const stopRejectedNativeSession = (
     threadId: ThreadId,
@@ -1413,6 +1443,25 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
       const canonicalEvent = yield* Effect.sync(() =>
         correlateRuntimeEventWithInstance(source, event),
       );
+      if (Option.isNone(projectionQuery) && canonicalEvent.runtimeEpochId !== undefined) return;
+      if (Option.isSome(projectionQuery)) {
+        const thread = yield* projectionQuery.value
+          .getThreadRuntimeContext(event.threadId)
+          .pipe(
+            Effect.catch((cause) =>
+              Effect.logWarning("Could not verify provider runtime epoch", { cause }).pipe(
+                Effect.as(undefined),
+              ),
+            ),
+          );
+        if (thread === undefined) return;
+        if (Option.isNone(thread)) return;
+        if (
+          thread.value.runtimeHandoff?.status === "pending" ||
+          thread.value.runtimeEpochId !== canonicalEvent.runtimeEpochId
+        )
+          return;
+      }
       yield* increment(providerRuntimeEventsTotal, {
         provider: canonicalEvent.provider,
         eventType: canonicalEvent.type,
@@ -1602,6 +1651,25 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
 
       const persistedCwd = readPersistedCwd(input.binding.runtimePayload);
       const persistedModelSelection = readPersistedModelSelection(input.binding.runtimePayload);
+      const runtimeContext = Option.isSome(projectionQuery)
+        ? yield* projectionQuery.value
+            .getThreadRuntimeContext(input.binding.threadId)
+            .pipe(
+              Effect.mapError((cause) =>
+                toValidationError(
+                  input.operation,
+                  "Could not verify provider runtime epoch.",
+                  cause,
+                ),
+              ),
+            )
+        : Option.none();
+      if (
+        Option.isSome(runtimeContext) &&
+        runtimeContext.value.runtimeHandoff?.status === "pending"
+      ) {
+        return yield* toValidationError(input.operation, "Provider runtime handoff is pending.");
+      }
 
       yield* requireNativeAuthority(
         input.binding.threadId,
@@ -1624,6 +1692,9 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
       );
       const resumed = yield* adapter
         .startSession({
+          ...(Option.isSome(runtimeContext) && runtimeContext.value.runtimeEpochId !== undefined
+            ? { runtimeEpochId: runtimeContext.value.runtimeEpochId }
+            : {}),
           threadId: input.binding.threadId,
           provider: input.binding.provider,
           providerInstanceId: bindingInstanceId,
@@ -1647,6 +1718,9 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
             activationOrigin,
             bindingInstanceId,
           ),
+        ),
+        Effect.andThen(
+          requireRuntimeEpoch(input.binding.threadId, resumed.runtimeEpochId, input.operation),
         ),
         Effect.onError(() =>
           stopRejectedNativeSession(input.binding.threadId, adapter, bindingInstanceId),
@@ -1813,6 +1887,36 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
           threadId,
           provider: resolvedProvider,
         };
+        if (Option.isNone(projectionQuery) && input.runtimeEpochId !== undefined) {
+          return yield* toValidationError(
+            "ProviderService.startSession",
+            "Could not verify provider runtime epoch.",
+          );
+        }
+        if (Option.isSome(projectionQuery)) {
+          const runtimeContext = yield* projectionQuery.value
+            .getThreadRuntimeContext(threadId)
+            .pipe(
+              Effect.mapError((cause) =>
+                toValidationError(
+                  "ProviderService.startSession",
+                  "Could not verify provider runtime epoch.",
+                  cause,
+                ),
+              ),
+            );
+          if (
+            (Option.isNone(runtimeContext) && input.runtimeEpochId !== undefined) ||
+            (Option.isSome(runtimeContext) &&
+              (runtimeContext.value.runtimeHandoff?.status === "pending" ||
+                runtimeContext.value.runtimeEpochId !== input.runtimeEpochId))
+          ) {
+            return yield* toValidationError(
+              "ProviderService.startSession",
+              "Provider runtime epoch changed or handoff is pending.",
+            );
+          }
+        }
         if (!instanceInfo.enabled) {
           return yield* toValidationError(
             "ProviderService.startSession",
@@ -1927,6 +2031,9 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
               activationOrigin,
               resolvedInstanceId,
             ),
+          ),
+          Effect.andThen(
+            requireRuntimeEpoch(threadId, input.runtimeEpochId, "ProviderService.startSession"),
           ),
           Effect.onError(() => stopRejectedNativeSession(threadId, adapter, resolvedInstanceId)),
         );

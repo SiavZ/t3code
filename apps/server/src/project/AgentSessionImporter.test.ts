@@ -61,6 +61,8 @@ import { VcsStatusBroadcaster } from "../vcs/VcsStatusBroadcaster.ts";
 import * as RepositoryIdentityResolver from "./RepositoryIdentityResolver.ts";
 import { importRecentAgentThreads } from "./AgentSessionImporter.ts";
 import * as AgentSessionScanner from "./AgentSessionScanner.ts";
+import * as RuntimeOperations from "../orchestration/ThreadRuntimeService.ts";
+import { ProviderService } from "../provider/Services/ProviderService.ts";
 
 const PROJECT_ID = ProjectId.make("project-1");
 const WORKSPACE_ROOT = "/tmp/project-from-server";
@@ -582,6 +584,161 @@ const integrationLayer = Layer.mergeAll(
 );
 
 it.layer(integrationLayer)("AgentSessionImporter integration", (it) => {
+  it.effect(
+    "handoff reactor waits for the owned native stop before starting a fresh epoch without a cursor",
+    () =>
+      Effect.gen(function* () {
+        const engine = yield* OrchestrationEngine.OrchestrationEngineService;
+        const snapshots = yield* ProjectionSnapshotQuery.ProjectionSnapshotQuery;
+        const directory = yield* ProviderSessionDirectory.ProviderSessionDirectory;
+        const fs = yield* FileSystem.FileSystem;
+        const cwd = yield* fs.makeTempDirectoryScoped();
+        const threadId = ThreadId.make("handoff-native-proof");
+        const projectId = ProjectId.make("handoff-native-project");
+        const modelSelection = { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5" };
+        const harness = yield* makeTestProviderAdapterHarness({
+          provider: ProviderDriverKind.make("codex"),
+        });
+        const stopping = yield* Deferred.make<void>();
+        const release = yield* Deferred.make<void>();
+        const fresh = yield* Deferred.make<void>();
+        let starts = 0;
+        const startSession = vi.fn((input: Parameters<typeof harness.adapter.startSession>[0]) =>
+          harness.adapter.startSession(input).pipe(
+            Effect.tap(() =>
+              Effect.gen(function* () {
+                starts++;
+                if (starts === 2) yield* Deferred.succeed(fresh, undefined);
+              }),
+            ),
+          ),
+        );
+        const stopSession: typeof harness.adapter.stopSession = (input) =>
+          Deferred.succeed(stopping, undefined).pipe(
+            Effect.andThen(Deferred.await(release)),
+            Effect.andThen(harness.adapter.stopSession(input)),
+          );
+        const providerLayer = makeProviderServiceLive().pipe(
+          Layer.provide(
+            Layer.succeed(
+              ProviderAdapterRegistry,
+              makeAdapterRegistryMock({
+                [harness.provider]: { ...harness.adapter, startSession, stopSession },
+              }),
+            ),
+          ),
+          Layer.provide(
+            Layer.succeed(ProviderSessionDirectory.ProviderSessionDirectory, directory),
+          ),
+          Layer.provide(Layer.succeed(ProjectionSnapshotQuery.ProjectionSnapshotQuery, snapshots)),
+          Layer.provide(Layer.succeed(ProviderEventLoggers, NoOpProviderEventLoggers)),
+          Layer.provide(AnalyticsService.layerTest),
+          Layer.provide(ServerSettingsService.layerTest()),
+        );
+        const reactorLayer = ProviderCommandReactorLive.pipe(
+          Layer.provideMerge(providerLayer),
+          Layer.provideMerge(RuntimeOperations.layer),
+          Layer.provide(
+            Layer.mock(ProviderAuthService)({
+              tryHandlePromptCommand: () => Effect.succeed(false),
+            }),
+          ),
+          Layer.provide(makeProviderRegistryLayer()),
+          Layer.provide(Layer.mock(GitWorkflowService)({})),
+          Layer.provide(Layer.mock(VcsStatusBroadcaster)({})),
+          Layer.provide(Layer.mock(TextGeneration)({})),
+          Layer.provide(Layer.mock(TerminalManager)({ closeIdle: () => Effect.void })),
+          Layer.provide(ServerSettingsService.layerTest()),
+        );
+        yield* engine.dispatch({
+          type: "project.create",
+          commandId: CommandId.make("handoff-project"),
+          projectId,
+          title: "Handoff",
+          workspaceRoot: cwd,
+          createdAt: "2026-10-03T00:00:00.000Z",
+        });
+        yield* engine.dispatch({
+          type: "thread.create",
+          commandId: CommandId.make("handoff-thread"),
+          threadId,
+          projectId,
+          title: "Handoff",
+          modelSelection,
+          runtimeMode: "full-access",
+          interactionMode: "default",
+          branch: null,
+          worktreePath: null,
+          createdAt: "2026-10-03T00:00:00.000Z",
+          historyImport: true,
+        });
+        yield* engine.dispatch({
+          type: "thread.history.import",
+          commandId: CommandId.make("handoff-history"),
+          threadId,
+          messages: [
+            {
+              messageId: MessageId.make("import:handoff-source"),
+              role: "user",
+              text: "Visible historical context",
+              createdAt: "2026-10-03T00:00:00.000Z",
+            },
+          ],
+        });
+        yield* Effect.gen(function* () {
+          const provider = yield* ProviderService;
+          const runtime = yield* RuntimeOperations.ThreadRuntimeService;
+          const reactor = yield* ProviderCommandReactor;
+          yield* provider.startSession(threadId, {
+            threadId,
+            providerInstanceId: modelSelection.instanceId,
+            modelSelection,
+            runtimeMode: "full-access",
+            cwd,
+            resumeCursor: { threadId: "old-native" },
+          });
+          yield* engine.dispatch({
+            type: "thread.session.set",
+            commandId: CommandId.make("handoff-ready"),
+            threadId,
+            session: {
+              threadId,
+              status: "ready",
+              providerName: "codex",
+              providerInstanceId: modelSelection.instanceId,
+              runtimeMode: "full-access",
+              activeTurnId: null,
+              lastError: null,
+              updatedAt: "2026-10-03T00:00:00.000Z",
+            },
+            createdAt: "2026-10-03T00:00:00.000Z",
+          });
+          yield* reactor.start();
+          const thread = Option.getOrThrow(yield* snapshots.getThreadDetailById(threadId));
+          const receipt = yield* runtime.handoff({
+            threadId,
+            expectedUpdatedAt: thread.updatedAt,
+            operationId: "native-proof",
+            targetModelSelection: modelSelection,
+          });
+          yield* Deferred.await(stopping);
+          expect(starts).toBe(1);
+          expect(
+            Option.getOrThrow(yield* snapshots.getThreadDetailById(threadId)).updatedAt,
+          ).not.toBe(thread.updatedAt);
+          expect((yield* runtime.metadata(threadId)).runtimeHandoff?.status).toBe("pending");
+          yield* Deferred.succeed(release, undefined);
+          yield* Deferred.await(fresh);
+          yield* reactor.drain;
+          expect(starts).toBe(2);
+          expect(startSession).toHaveBeenLastCalledWith(
+            expect.objectContaining({ threadId, runtimeEpochId: receipt.epochId }),
+          );
+          expect(startSession.mock.calls[1]?.[0].resumeCursor).toBeUndefined();
+          expect((yield* runtime.metadata(threadId)).runtimeHandoff?.status).toBe("committed");
+        }).pipe(Effect.provide(reactorLayer));
+      }),
+  );
   it.effect("imports once after the real engine persists an old rejected receipt", () =>
     Effect.gen(function* () {
       const engine = yield* OrchestrationEngine.OrchestrationEngineService;
