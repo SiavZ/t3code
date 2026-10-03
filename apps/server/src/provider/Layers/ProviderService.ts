@@ -1,3 +1,14 @@
+import {
+  makeActivationCancellationFence,
+  NativeActivationCancellation,
+} from "../../orchestration/activationCancellationFence.ts";
+import {
+  captureNativeUnattendedActivation,
+  NativeUnattendedActivation,
+  validateNativeUnattendedAuthority,
+} from "../../orchestration/nativeUnattendedAuthority.ts";
+import * as SqlClient from "effect/unstable/sql/SqlClient";
+
 /**
  * ProviderServiceLive - Cross-provider orchestration layer.
  *
@@ -502,6 +513,100 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
   const projectionQuery = yield* Effect.serviceOption(
     ProjectionSnapshotQuery.ProjectionSnapshotQuery,
   );
+  const nativeAuthoritySql = yield* Effect.serviceOption(SqlClient.SqlClient);
+  const nativeCancellationFence = Option.isSome(nativeAuthoritySql)
+    ? yield* makeActivationCancellationFence.pipe(
+        Effect.provideService(SqlClient.SqlClient, nativeAuthoritySql.value),
+      )
+    : undefined;
+  const requireNativeCancellation = (
+    origin: NativeActivationCancellation["Service"] | undefined,
+    operation: string,
+  ) =>
+    Effect.gen(function* () {
+      if (!origin) return;
+      if (
+        !nativeCancellationFence ||
+        !(yield* nativeCancellationFence
+          .canCancel(origin)
+          .pipe(
+            Effect.mapError((cause) =>
+              toValidationError(operation, "Could not verify conditional cancellation.", cause),
+            ),
+          ))
+      )
+        return yield* toValidationError(
+          operation,
+          "Conditional cancellation was superseded by another activation.",
+        );
+    });
+  const captureNativeOrigin = (threadId: ThreadId) =>
+    Effect.gen(function* () {
+      const trusted = yield* Effect.serviceOption(NativeUnattendedActivation);
+      if (Option.isSome(trusted)) return trusted.value;
+      if (Option.isSome(nativeAuthoritySql))
+        return yield* captureNativeUnattendedActivation(nativeAuthoritySql.value, threadId).pipe(
+          Effect.mapError((cause) =>
+            toValidationError(
+              "ProviderService.activation",
+              "Could not capture unattended origin.",
+              cause,
+            ),
+          ),
+        );
+      return undefined;
+    });
+  const requireNativeAuthority = (
+    threadId: ThreadId,
+    mode: typeof RuntimeMode.Type | undefined,
+    operation: string,
+    origin?: NativeUnattendedActivation["Service"],
+    instanceId?: ProviderInstanceId,
+  ) =>
+    Effect.gen(function* () {
+      if (Option.isSome(nativeAuthoritySql)) {
+        const allowed = yield* validateNativeUnattendedAuthority(
+          nativeAuthoritySql.value,
+          threadId,
+          mode,
+          origin,
+        ).pipe(
+          Effect.mapError((cause) =>
+            toValidationError(operation, "Could not verify unattended grant.", cause),
+          ),
+        );
+        if (!allowed)
+          return yield* toValidationError(
+            operation,
+            "Unattended grant was revoked or its authority ceiling no longer permits this activation.",
+          );
+        if (origin && instanceId)
+          yield* requireWorkerRuntimeMode(threadId, mode, operation, instanceId).pipe(
+            Effect.provideService(NativeUnattendedActivation, origin),
+          );
+      } else if (origin) {
+        return yield* toValidationError(
+          operation,
+          "Captured unattended authority cannot be verified without persistence.",
+        );
+      } else if (
+        Option.isSome(projectionQuery) &&
+        projectionQuery.value.getThreadActivationAuthority
+      ) {
+        const authority = yield* projectionQuery.value
+          .getThreadActivationAuthority(threadId)
+          .pipe(
+            Effect.mapError((cause) =>
+              toValidationError(operation, "Could not verify unattended authority.", cause),
+            ),
+          );
+        if (Option.isSome(authority))
+          return yield* toValidationError(
+            operation,
+            "Unattended grant cannot be verified without persistence.",
+          );
+      }
+    });
   const nativeLifecycles = new Map<
     ThreadId,
     {
@@ -979,8 +1084,9 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
       }
       return;
     }
-    if (!initial.value.worker) return;
-    if (initial.value.worker.stopRequestedAt != null) {
+    const unattendedOrigin = yield* Effect.serviceOption(NativeUnattendedActivation);
+    if (!initial.value.worker && Option.isNone(unattendedOrigin)) return;
+    if (initial.value.worker?.stopRequestedAt != null) {
       return yield* toValidationError(
         operation,
         "Worker execution was stopped. Send an explicit follow-up to resume it.",
@@ -1023,8 +1129,11 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
       }
       current = owner.value;
     }
-    if (current.id !== initial.value.worker.rootThreadId) {
+    if (initial.value.worker && current.id !== initial.value.worker.rootThreadId) {
       return yield* toValidationError(operation, "Worker root does not match its ownership chain.");
+    }
+    if (!isRuntimeMode(requested)) {
+      return yield* toValidationError(operation, "Restricted native runtime mode is invalid.");
     }
     if (instanceId && requested !== "full-access") {
       const settings = yield* serverSettings.getSettings.pipe(
@@ -1155,7 +1264,12 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
   const prepareMcpSession = (threadId: ThreadId, providerInstanceId: ProviderInstanceId) =>
     Effect.gen(function* () {
       const capabilities = yield* agentAccessCapabilities(threadId);
-      const credential = yield* issueMcpCredential({ threadId, providerInstanceId, capabilities });
+      const credential = yield* issueMcpCredential({
+        threadId,
+        providerInstanceId,
+        capabilities,
+        capabilityCeiling: capabilities,
+      });
       if (credential) {
         const deviceEnvironment = capabilities.has("device")
           ? yield* agentDeviceEnvironment
@@ -1440,6 +1554,7 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
     readonly binding: ProviderSessionDirectory.ProviderRuntimeBinding;
     readonly operation: string;
   }) {
+    const activationOrigin = yield* captureNativeOrigin(input.binding.threadId);
     const bindingInstanceId = yield* requireBindingInstanceId(input.operation, input.binding);
     yield* Effect.annotateCurrentSpan({
       "provider.operation": "recover-session",
@@ -1488,7 +1603,25 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
       const persistedCwd = readPersistedCwd(input.binding.runtimePayload);
       const persistedModelSelection = readPersistedModelSelection(input.binding.runtimePayload);
 
-      yield* prepareMcpSession(input.binding.threadId, bindingInstanceId);
+      yield* requireNativeAuthority(
+        input.binding.threadId,
+        input.binding.runtimeMode,
+        input.operation,
+        activationOrigin,
+        bindingInstanceId,
+      );
+      yield* activationOrigin
+        ? prepareMcpSession(input.binding.threadId, bindingInstanceId).pipe(
+            Effect.provideService(NativeUnattendedActivation, activationOrigin),
+          )
+        : prepareMcpSession(input.binding.threadId, bindingInstanceId);
+      yield* requireNativeAuthority(
+        input.binding.threadId,
+        input.binding.runtimeMode,
+        input.operation,
+        activationOrigin,
+        bindingInstanceId,
+      );
       const resumed = yield* adapter
         .startSession({
           threadId: input.binding.threadId,
@@ -1506,6 +1639,15 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
         input.operation,
         bindingInstanceId,
       ).pipe(
+        Effect.andThen(
+          requireNativeAuthority(
+            input.binding.threadId,
+            resumed.runtimeMode,
+            input.operation,
+            activationOrigin,
+            bindingInstanceId,
+          ),
+        ),
         Effect.onError(() =>
           stopRejectedNativeSession(input.binding.threadId, adapter, bindingInstanceId),
         ),
@@ -1631,6 +1773,7 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
 
   const startSession: ProviderServiceMethod<"startSession"> = Effect.fn("startSession")(
     function* (threadId, rawInput) {
+      const activationOrigin = yield* captureNativeOrigin(threadId);
       const parsed = yield* decodeInputOrValidationError({
         operation: "ProviderService.startSession",
         schema: ProviderSessionStartInput,
@@ -1742,7 +1885,25 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
         }
         const adapter = yield* registry.getByInstance(resolvedInstanceId);
         yield* clearTurnAnalyticsSession(resolvedInstanceId, threadId);
-        yield* prepareMcpSession(threadId, resolvedInstanceId);
+        yield* requireNativeAuthority(
+          threadId,
+          input.runtimeMode,
+          "ProviderService.startSession",
+          activationOrigin,
+          resolvedInstanceId,
+        );
+        yield* activationOrigin
+          ? prepareMcpSession(threadId, resolvedInstanceId).pipe(
+              Effect.provideService(NativeUnattendedActivation, activationOrigin),
+            )
+          : prepareMcpSession(threadId, resolvedInstanceId);
+        yield* requireNativeAuthority(
+          threadId,
+          input.runtimeMode,
+          "ProviderService.startSession",
+          activationOrigin,
+          resolvedInstanceId,
+        );
         const session = yield* adapter
           .startSession({
             ...input,
@@ -1758,6 +1919,15 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
           "ProviderService.startSession",
           resolvedInstanceId,
         ).pipe(
+          Effect.andThen(
+            requireNativeAuthority(
+              threadId,
+              session.runtimeMode,
+              "ProviderService.startSession",
+              activationOrigin,
+              resolvedInstanceId,
+            ),
+          ),
           Effect.onError(() => stopRejectedNativeSession(threadId, adapter, resolvedInstanceId)),
         );
         if (session.provider !== adapter.provider) {
@@ -1825,6 +1995,7 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
     });
 
     const attachments = parsed.attachments ?? [];
+    const activationOrigin = yield* captureNativeOrigin(parsed.threadId);
     if (!parsed.input && attachments.length === 0 && parsed.continuation !== true) {
       return yield* toValidationError(
         "ProviderService.sendTurn",
@@ -1977,6 +2148,30 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
         "ProviderService.sendTurn",
         routed.instanceId,
       );
+      const capabilities = yield* agentAccessCapabilities(input.threadId);
+      yield* requireNativeAuthority(
+        input.threadId,
+        routed.runtimeMode,
+        "ProviderService.sendTurn",
+        activationOrigin,
+        routed.instanceId,
+      );
+      yield* activationOrigin
+        ? McpSessionRegistry.restrictActiveMcpThreadCapabilities(input.threadId, capabilities).pipe(
+            Effect.provideService(NativeUnattendedActivation, activationOrigin),
+          )
+        : McpSessionRegistry.restrictActiveMcpThreadCapabilities(input.threadId, capabilities);
+      const mcpConfig = McpProviderSession.readMcpProviderSession(input.threadId);
+      if (mcpConfig) {
+        McpProviderSession.setMcpProviderSession({
+          ...mcpConfig,
+          capabilities: new Set(
+            [...mcpConfig.capabilities].filter((capability) =>
+              capabilities.has(capability as McpInvocationContext.McpCapability),
+            ),
+          ),
+        });
+      }
       yield* McpSessionRegistry.touchActiveMcpThread(input.threadId);
       const analyticsModelSelection =
         input.modelSelection?.instanceId === routed.instanceId ? input.modelSelection : undefined;
@@ -2003,6 +2198,13 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
               input.threadId,
               routed.runtimeMode,
               "ProviderService.sendTurn",
+              routed.instanceId,
+            );
+            yield* requireNativeAuthority(
+              input.threadId,
+              routed.runtimeMode,
+              "ProviderService.sendTurn",
+              activationOrigin,
               routed.instanceId,
             );
             const turn = yield* routed.adapter.sendTurn(input).pipe(
@@ -2205,12 +2407,16 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
         schema: ProviderInterruptTurnInput,
         payload: rawInput,
       });
+      const conditional = Option.getOrUndefined(
+        yield* Effect.serviceOption(NativeActivationCancellation),
+      );
+      yield* requireNativeCancellation(conditional, "ProviderService.interruptTurn");
       let metricProvider = "unknown";
       return yield* Effect.gen(function* () {
         const routed = yield* resolveRoutableSession({
           threadId: input.threadId,
           operation: "ProviderService.interruptTurn",
-          allowRecovery: true,
+          allowRecovery: conditional === undefined,
         });
         metricProvider = routed.adapter.provider;
         yield* Effect.annotateCurrentSpan({
@@ -2219,6 +2425,7 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
           "provider.thread_id": input.threadId,
           "provider.turn_id": input.turnId,
         });
+        yield* requireNativeCancellation(conditional, "ProviderService.interruptTurn");
         yield* routed.adapter.interruptTurn(routed.threadId, input.turnId);
         yield* analytics.record("provider.turn.interrupted", {
           provider: routed.adapter.provider,
@@ -2318,9 +2525,14 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
         schema: ProviderStopSessionInput,
         payload: rawInput,
       });
-      yield* clearMcpSession(input.threadId);
+      const conditional = Option.getOrUndefined(
+        yield* Effect.serviceOption(NativeActivationCancellation),
+      );
+      if (!conditional) yield* clearMcpSession(input.threadId);
       let metricProvider = "unknown";
       return yield* Effect.gen(function* () {
+        yield* requireNativeCancellation(conditional, "ProviderService.stopSession");
+        if (conditional) yield* clearMcpSession(input.threadId);
         const rejectedNative = nativeLifecycle(input.threadId).rejectedNative;
         const routed = rejectedNative
           ? {
@@ -2345,12 +2557,14 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
           const session = (yield* routed.adapter.listSessions()).find(
             (session) => session.threadId === routed.threadId,
           );
+          yield* requireNativeCancellation(conditional, "ProviderService.stopSession");
           if (session && !rejectedNative) {
             yield* upsertSessionBinding(
               { ...session, providerInstanceId: routed.instanceId },
               input.threadId,
             );
           }
+          yield* requireNativeCancellation(conditional, "ProviderService.stopSession");
           yield* routed.adapter.stopSession(routed.threadId).pipe(
             Effect.onError(() =>
               Effect.sync(() => {
@@ -2359,6 +2573,7 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
             ),
           );
         }
+        yield* requireNativeCancellation(conditional, "ProviderService.stopSession");
         const pendingCompaction = pendingCompactions.get(input.threadId);
         if (pendingCompaction !== undefined) {
           yield* settleCompaction(input.threadId, pendingCompaction, "turn.aborted");

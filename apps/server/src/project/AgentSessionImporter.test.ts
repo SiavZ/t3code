@@ -559,7 +559,7 @@ const integrationServerConfig = ServerConfig.layerTest(process.cwd(), {
   prefix: "t3-agent-session-importer-test-",
 });
 const integrationRuntimeRepository = ProviderSessionRuntime.layer.pipe(
-  Layer.provide(SqlitePersistenceMemory),
+  Layer.provideMerge(SqlitePersistenceMemory),
 );
 const integrationLayer = Layer.mergeAll(
   OrchestrationEngineLive.pipe(
@@ -576,7 +576,7 @@ const integrationLayer = Layer.mergeAll(
   Layer.provide(OrchestrationEventStoreLive),
   Layer.provide(OrchestrationCommandReceiptRepositoryLive),
   Layer.provide(RepositoryIdentityResolver.layer),
-  Layer.provide(SqlitePersistenceMemory),
+  Layer.provideMerge(SqlitePersistenceMemory),
   Layer.provideMerge(integrationServerConfig),
   Layer.provideMerge(NodeServices.layer),
 );

@@ -79,6 +79,8 @@ import {
   type PullRequestRef,
   WS_METHODS,
   WsRpcGroup,
+  WsCoreRpcGroup,
+  ParityToolsRpcGroup,
   WORKTREE_SETUP_ACTIVITY_KIND,
   worktreeSetupActivityId,
   type WorktreeSetupSnapshot,
@@ -105,6 +107,7 @@ import {
 } from "./orchestration/Normalizer.ts";
 import * as OrchestrationEngine from "./orchestration/Services/OrchestrationEngine.ts";
 import * as OwnedWorkers from "./orchestration/OwnedWorkers.ts";
+import * as UnattendedGrants from "./orchestration/UnattendedGrants.ts";
 import * as ProjectionSnapshotQuery from "./orchestration/Services/ProjectionSnapshotQuery.ts";
 import { ThreadDeletionReactor } from "./orchestration/Services/ThreadDeletionReactor.ts";
 import {
@@ -506,7 +509,32 @@ const makeWsRpcLayer = (
   clientAnalyticsProps: Readonly<Record<string, unknown>>,
   previewAutomationBroker: PreviewAutomationBroker.PreviewAutomationBroker["Service"],
 ) =>
-  WsRpcGroup.toLayer(
+  Layer.mergeAll(
+    makeWsCoreRpcLayer(currentSession, clientOrigin, clientAnalyticsProps, previewAutomationBroker),
+    makeParityToolsRpcLayer(),
+  );
+
+const makeParityToolsRpcLayer = () =>
+  ParityToolsRpcGroup.toLayer(
+    Effect.gen(function* () {
+      const unattendedGrants = yield* UnattendedGrants.UnattendedGrants;
+      return ParityToolsRpcGroup.of({
+        [WS_METHODS.unattendedGrantCreate]: (input) =>
+          unattendedGrants.create(input, { source: "client" }),
+        [WS_METHODS.unattendedGrantList]: (input) => unattendedGrants.list(input),
+        [WS_METHODS.unattendedGrantRevoke]: (input) =>
+          unattendedGrants.revoke(input, { source: "client" }),
+      });
+    }),
+  );
+
+const makeWsCoreRpcLayer = (
+  currentSession: EnvironmentAuth.AuthenticatedSession,
+  clientOrigin: OrchestrationClientOrigin,
+  clientAnalyticsProps: Readonly<Record<string, unknown>>,
+  previewAutomationBroker: PreviewAutomationBroker.PreviewAutomationBroker["Service"],
+) =>
+  WsCoreRpcGroup.toLayer(
     Effect.gen(function* () {
       const currentSessionId = currentSession.sessionId;
       const crypto = yield* Crypto.Crypto;
@@ -2138,7 +2166,7 @@ const makeWsRpcLayer = (
           .refreshStatus(cwd)
           .pipe(Effect.ignoreCause({ log: true }), Effect.forkDetach, Effect.asVoid);
 
-      return WsRpcGroup.of({
+      return WsCoreRpcGroup.of({
         [ORCHESTRATION_WS_METHODS.dispatchCommand]: (command) =>
           observeRpcEffect(
             ORCHESTRATION_WS_METHODS.dispatchCommand,
@@ -4135,6 +4163,7 @@ export const websocketRpcRouteLayer = Layer.unwrap(
     });
     const pullRequests = yield* PullRequestService.PullRequestService;
     const ownedWorkers = yield* OwnedWorkers.OwnedWorkers;
+    const unattendedGrants = yield* UnattendedGrants.UnattendedGrants;
     const sql = yield* SqlClient.SqlClient;
     return HttpRouter.add(
       "GET",
@@ -4180,6 +4209,7 @@ export const websocketRpcRouteLayer = Layer.unwrap(
                 // mutation invalidates the HTTP diff cache that every client reads from.
                 Layer.provide(Layer.succeed(PullRequestService.PullRequestService, pullRequests)),
                 Layer.provide(Layer.succeed(OwnedWorkers.OwnedWorkers, ownedWorkers)),
+                Layer.provide(Layer.succeed(UnattendedGrants.UnattendedGrants, unattendedGrants)),
               )
               .pipe(
                 Layer.provide(

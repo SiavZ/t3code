@@ -5,7 +5,15 @@ import type {
   ProjectId,
 } from "@t3tools/contracts";
 import * as NodeCrypto from "node:crypto";
-import { OrchestrationCommand, ThreadId, WorkerOperationError } from "@t3tools/contracts";
+import {
+  OrchestrationCommand,
+  ThreadId,
+  WorkerOperationError,
+  CoordinationError,
+  RuntimeMode,
+  WorkerMcpCapability,
+  isWorkerRuntimeModeAllowed,
+} from "@t3tools/contracts";
 import * as Cause from "effect/Cause";
 import * as Clock from "effect/Clock";
 import * as Crypto from "effect/Crypto";
@@ -23,6 +31,11 @@ import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 
+const decodeGrantCeiling = Schema.decodeUnknownEffect(
+  Schema.fromJsonString(
+    Schema.Struct({ runtimeMode: RuntimeMode, mcpCapabilities: Schema.Array(WorkerMcpCapability) }),
+  ),
+);
 const isWorkerOperationError = Schema.is(WorkerOperationError);
 
 import {
@@ -312,6 +325,133 @@ const makeOrchestrationEngine = Effect.gen(function* () {
             ? yield* projectionSnapshotQuery.getUserInputActivity(envelope.command)
             : Option.none();
         const currentCommand = envelope.command;
+        if (
+          currentCommand.type === "thread.session.set" &&
+          (currentCommand.expectedActivationSequence !== undefined ||
+            currentCommand.expectedMessageId !== undefined)
+        ) {
+          const activations = yield* sql<{
+            message_id: string;
+            event_sequence: number;
+          }>`SELECT message_id, event_sequence FROM projection_thread_activation_authorities WHERE thread_id = ${currentCommand.threadId}`;
+          const activation = activations[0];
+          if (
+            !activation ||
+            (currentCommand.expectedMessageId !== undefined &&
+              activation.message_id !== currentCommand.expectedMessageId) ||
+            (currentCommand.expectedActivationSequence !== undefined &&
+              activation.event_sequence > currentCommand.expectedActivationSequence)
+          ) {
+            return yield* new CoordinationError({
+              code: "conflict",
+              detail: "Cancellation acknowledgement targets a superseded activation.",
+            });
+          }
+        }
+        if (
+          (currentCommand.type === "thread.turn.start" ||
+            currentCommand.type === "thread.worker.spawn" ||
+            currentCommand.type === "thread.worker.send") &&
+          currentCommand.unattendedAuthority !== undefined
+        ) {
+          const authority = currentCommand.unattendedAuthority;
+          const rows = yield* sql<{
+            owner_thread_id: string;
+            project_id: string;
+            revision: number;
+            revoked: number;
+            ceiling_json: string;
+          }>`SELECT owner_thread_id, project_id, revision, revoked, ceiling_json FROM unattended_grants WHERE grant_id = ${authority.grantId}`;
+          const grant = rows[0];
+          const owner = yield* projectionSnapshotQuery.getWorkerState(authority.ownerThreadId);
+          const target = yield* projectionSnapshotQuery.getWorkerState(
+            currentCommand.type === "thread.worker.spawn"
+              ? currentCommand.callerThreadId
+              : currentCommand.threadId,
+          );
+          if (
+            !grant ||
+            grant.revoked !== 0 ||
+            grant.revision !== authority.grantRevision ||
+            grant.owner_thread_id !== authority.ownerThreadId ||
+            Option.isNone(owner) ||
+            Option.isNone(target) ||
+            owner.value.thread.worker ||
+            grant.project_id !== owner.value.thread.projectId ||
+            target.value.thread.projectId !== grant.project_id ||
+            (target.value.thread.id !== authority.ownerThreadId &&
+              target.value.thread.worker?.rootThreadId !== authority.ownerThreadId)
+          ) {
+            return yield* new CoordinationError({
+              code: "forbidden",
+              detail:
+                "Unattended activation grant is revoked, stale, or outside its ownership scope.",
+            });
+          }
+          const ceiling = yield* decodeGrantCeiling(grant.ceiling_json).pipe(
+            Effect.mapError(
+              () =>
+                new CoordinationError({
+                  code: "invalid",
+                  detail: "Stored grant ceiling is invalid.",
+                }),
+            ),
+          );
+          const modeAllowed = isWorkerRuntimeModeAllowed;
+          if (
+            !Array.isArray(ceiling.mcpCapabilities) ||
+            !modeAllowed(authority.runtimeModeCeiling, ceiling.runtimeMode) ||
+            !modeAllowed(authority.runtimeModeCeiling, owner.value.thread.runtimeMode) ||
+            !modeAllowed(
+              currentCommand.type === "thread.turn.start"
+                ? currentCommand.runtimeMode
+                : (currentCommand.runtimeModeCeiling ?? target.value.thread.runtimeMode),
+              authority.runtimeModeCeiling,
+            ) ||
+            authority.mcpCapabilityCeiling.some(
+              (capability) => !ceiling.mcpCapabilities.includes(capability),
+            )
+          ) {
+            return yield* new CoordinationError({
+              code: "forbidden",
+              detail: "Unattended activation exceeds its current grant ceiling.",
+            });
+          }
+        }
+        if (
+          (currentCommand.type === "thread.turn.interrupt" ||
+            currentCommand.type === "thread.session.stop") &&
+          (currentCommand.expectedMessageId !== undefined ||
+            currentCommand.expectedTurnId !== undefined)
+        ) {
+          const guarded = yield* projectionSnapshotQuery.getWorkerState(currentCommand.threadId);
+          if (Option.isNone(guarded))
+            return yield* new CoordinationError({
+              code: "notFound",
+              detail: "Guarded target is unavailable.",
+            });
+          const { thread, pendingMessageId } = guarded.value;
+          const currentRequests =
+            currentCommand.expectedMessageId === undefined
+              ? []
+              : yield* sql<{
+                  pending_message_id: string;
+                }>`SELECT pending_message_id FROM projection_turns WHERE thread_id = ${thread.id} AND turn_id = ${thread.latestTurn?.turnId ?? ""} LIMIT 1`;
+          // A queued activation supersedes the terminal turn's message identity.
+          const messageMatches =
+            currentCommand.expectedMessageId === undefined ||
+            (pendingMessageId !== null
+              ? pendingMessageId === currentCommand.expectedMessageId
+              : currentRequests[0]?.pending_message_id === currentCommand.expectedMessageId);
+          const turnMatches =
+            currentCommand.expectedTurnId === undefined ||
+            thread.latestTurn?.turnId === currentCommand.expectedTurnId;
+          if (!messageMatches || !turnMatches)
+            return yield* new CoordinationError({
+              code: "conflict",
+              detail: "Guarded cancellation no longer targets the current assignment.",
+            });
+        }
         const workerStates =
           currentCommand.type === "thread.worker.spawn" ||
           currentCommand.type === "thread.worker.send" ||

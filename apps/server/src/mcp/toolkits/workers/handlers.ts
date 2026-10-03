@@ -11,7 +11,10 @@ const make = Effect.gen(function* () {
       const scope = yield* McpInvocationContext.requireMcpCapability("workers");
       return yield* workers.spawn(
         { ...input, callerThreadId: scope.threadId },
-        { mcpCapabilityCeiling: [...scope.capabilities] },
+        {
+          mcpCapabilityCeiling: [...scope.capabilities],
+          ...(scope.unattendedAuthority ? { unattendedAuthority: scope.unattendedAuthority } : {}),
+        },
       );
     }),
     workers_list: Effect.fn("WorkersToolkit.list")(function* () {
@@ -24,7 +27,12 @@ const make = Effect.gen(function* () {
     }),
     workers_send: Effect.fn("WorkersToolkit.send")(function* (input) {
       const scope = yield* McpInvocationContext.requireMcpCapability("workers");
-      return yield* workers.send({ ...input, callerThreadId: scope.threadId });
+      return yield* workers.send(
+        { ...input, callerThreadId: scope.threadId },
+        {
+          ...(scope.unattendedAuthority ? { unattendedAuthority: scope.unattendedAuthority } : {}),
+        },
+      );
     }),
     workers_stop: Effect.fn("WorkersToolkit.stop")(function* (input) {
       const scope = yield* McpInvocationContext.requireMcpCapability("workers");

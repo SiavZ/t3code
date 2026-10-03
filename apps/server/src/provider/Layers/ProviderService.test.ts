@@ -86,6 +86,7 @@ import * as ServerConfig from "../../config.ts";
 import * as ServerSettings from "../../serverSettings.ts";
 import * as AnalyticsService from "../../telemetry/AnalyticsService.ts";
 import { makeAdapterRegistryMock } from "../testUtils/providerAdapterRegistryMock.ts";
+import { NativeActivationCancellation } from "../../orchestration/activationCancellationFence.ts";
 import * as ProjectionSnapshotQuery from "../../orchestration/Services/ProjectionSnapshotQuery.ts";
 
 const encodeJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
@@ -5078,6 +5079,7 @@ describe("agent browser access", () => {
     projectOverride?: boolean | { readonly browser?: boolean; readonly device?: boolean },
     options?: {
       deleted?: boolean;
+      readonly withSql?: boolean;
       readonly realCredentials?: boolean;
       readonly withoutOrchestration?: boolean;
       readonly adapter?: ReturnType<typeof makeFakeCodexAdapter>;
@@ -5088,6 +5090,7 @@ describe("agent browser access", () => {
       readonly environment?: import("@t3tools/contracts").ProviderInstanceEnvironment;
       readonly runInstead?: (
         provider: ProviderService.ProviderService["Service"],
+        sql?: SqlClient.SqlClient,
       ) => Effect.Effect<void, ProviderServiceError>;
       readonly afterStart?: (
         provider: ProviderService.ProviderService["Service"],
@@ -5110,6 +5113,7 @@ describe("agent browser access", () => {
         Layer.provide(runtimeRepositoryLayer),
       );
       const projectionLayer = Layer.succeed(ProjectionSnapshotQuery.ProjectionSnapshotQuery, {
+        getThreadActivationAuthority: () => Effect.succeedNone,
         getWorkerSpawnMetadata: (id) =>
           Effect.succeed(Option.fromNullishOr(id === threadId ? options?.worker : undefined)),
         getWorkerAdmissionStates: () => Effect.die("unused"),
@@ -5243,7 +5247,11 @@ describe("agent browser access", () => {
 
       yield* Effect.gen(function* () {
         const provider = yield* ProviderService.ProviderService;
-        if (options?.runInstead) return yield* options.runInstead(provider);
+        if (options?.runInstead)
+          return yield* options.runInstead(
+            provider,
+            Option.getOrUndefined(yield* Effect.serviceOption(SqlClient.SqlClient)),
+          );
         yield* provider.startSession(threadId, {
           provider: CODEX_DRIVER,
           providerInstanceId: codexInstanceId,
@@ -5251,7 +5259,13 @@ describe("agent browser access", () => {
           runtimeMode: options?.runtimeMode ?? "full-access",
         });
         if (options?.afterStart) yield* options.afterStart(provider);
-      }).pipe(Effect.provide(providerLayer));
+      }).pipe(
+        Effect.provide(
+          options?.withSql
+            ? providerLayer.pipe(Layer.provideMerge(SqlitePersistenceMemory))
+            : providerLayer,
+        ),
+      );
 
       return issued;
     });
@@ -5653,6 +5667,138 @@ describe("agent browser access", () => {
           }),
       };
       yield* startSessionWith(false, threadId, undefined, options);
+    }).pipe(Effect.provide(NodeServices.layer)),
+  );
+
+  it.effect(
+    "does not let a stale conditional stop revoke a replacement paused in native startup",
+    () =>
+      Effect.gen(function* () {
+        const registry = yield* McpSessionRegistry.McpSessionRegistry;
+        const enteredStart = yield* Deferred.make<void>();
+        const releaseStart = yield* Deferred.make<void>();
+        const stopAttempted = yield* Deferred.make<void>();
+        const adapter = makeFakeCodexAdapter();
+        const start = adapter.startSession.getMockImplementation()!;
+        adapter.startSession.mockImplementation((input) =>
+          start(input).pipe(
+            Effect.tap(() => Deferred.succeed(enteredStart, undefined)),
+            Effect.tap(() => Deferred.await(releaseStart)),
+          ),
+        );
+        const threadId = ThreadId.make("stale-stop-replacement");
+        const oldMessageId = MessageId.make("old-stop-message");
+        yield* startSessionWith(false, threadId, undefined, {
+          adapter,
+          realCredentials: true,
+          withSql: true,
+          runInstead: (provider, sql) =>
+            Effect.gen(function* () {
+              if (!sql) return yield* Effect.die("Missing isolated SQLite");
+              yield* sql`INSERT INTO projection_turn_cancellations (thread_id,message_id,event_sequence) VALUES (${threadId},${oldMessageId},1)`.pipe(
+                Effect.orDie,
+              );
+              const replacement = yield* provider
+                .startSession(threadId, {
+                  provider: CODEX_DRIVER,
+                  providerInstanceId: codexInstanceId,
+                  threadId,
+                  runtimeMode: "full-access",
+                })
+                .pipe(Effect.forkChild);
+              yield* Deferred.await(enteredStart);
+              const token =
+                McpProviderSession.readMcpProviderSession(threadId)!.authorizationHeader.slice(7);
+              assert.isDefined(yield* registry.resolve(token));
+              const bindingBefore =
+                yield* sql`SELECT * FROM provider_session_runtime WHERE thread_id = ${threadId}`.pipe(
+                  Effect.orDie,
+                );
+              const staleStop = yield* Deferred.succeed(stopAttempted, undefined).pipe(
+                Effect.andThen(
+                  provider.stopSession({ threadId }).pipe(
+                    Effect.provideService(NativeActivationCancellation, {
+                      threadId,
+                      sequence: 1,
+                      expectedMessageId: oldMessageId,
+                    }),
+                  ),
+                ),
+                Effect.exit,
+                Effect.forkChild,
+              );
+              yield* Deferred.await(stopAttempted);
+              // The later durable activation supersedes A while B is still awaiting its native ACK.
+              yield* sql`INSERT INTO orchestration_events (sequence,event_id,aggregate_kind,stream_id,stream_version,event_type,occurred_at,actor_kind,payload_json,metadata_json)
+            VALUES (2,'replacement-start','thread',${threadId},1,'thread.turn-start-requested','2026-10-03T00:00:00.000Z','user','{}','{}')`.pipe(
+                Effect.orDie,
+              );
+              assert.isDefined(yield* registry.resolve(token));
+              const bindingPaused =
+                yield* sql`SELECT * FROM provider_session_runtime WHERE thread_id = ${threadId}`.pipe(
+                  Effect.orDie,
+                );
+              assert.deepEqual(bindingPaused, bindingBefore);
+              yield* Deferred.succeed(releaseStart, undefined);
+              yield* Fiber.join(replacement);
+              assert.isTrue(Exit.isFailure(yield* Fiber.join(staleStop)));
+              assert.isDefined(yield* registry.resolve(token));
+              assert.equal(adapter.stopSession.mock.calls.length, 0);
+              assert.equal((yield* provider.listSessions()).length, 1);
+            }),
+        });
+      }).pipe(Effect.provide(credentialRegistryLayer), Effect.provide(NodeServices.layer)),
+  );
+
+  it.effect("rejects a superseded conditional interrupt after asynchronous routing", () =>
+    Effect.gen(function* () {
+      const enteredRoute = yield* Deferred.make<void>();
+      const releaseRoute = yield* Deferred.make<void>();
+      const adapter = makeFakeCodexAdapter();
+      const hasSession = adapter.hasSession.getMockImplementation()!;
+      const threadId = ThreadId.make("stale-interrupt-routing");
+      const oldMessageId = MessageId.make("old-interrupt-message");
+      yield* startSessionWith(false, threadId, undefined, {
+        adapter,
+        withSql: true,
+        runInstead: (provider, sql) =>
+          Effect.gen(function* () {
+            if (!sql) return yield* Effect.die("Missing isolated SQLite");
+            yield* provider.startSession(threadId, {
+              provider: CODEX_DRIVER,
+              providerInstanceId: codexInstanceId,
+              threadId,
+              runtimeMode: "full-access",
+            });
+            yield* sql`INSERT INTO projection_turn_cancellations (thread_id,message_id,event_sequence) VALUES (${threadId},${oldMessageId},1)`.pipe(
+              Effect.orDie,
+            );
+            adapter.hasSession.mockImplementation((id) =>
+              Deferred.succeed(enteredRoute, undefined).pipe(
+                Effect.andThen(Deferred.await(releaseRoute)),
+                Effect.andThen(hasSession(id)),
+              ),
+            );
+            const interruption = yield* provider.interruptTurn({ threadId }).pipe(
+              Effect.provideService(NativeActivationCancellation, {
+                threadId,
+                sequence: 1,
+                expectedMessageId: oldMessageId,
+              }),
+              Effect.exit,
+              Effect.forkChild,
+            );
+            yield* Deferred.await(enteredRoute);
+            yield* sql`INSERT INTO orchestration_events (sequence,event_id,aggregate_kind,stream_id,stream_version,event_type,occurred_at,actor_kind,payload_json,metadata_json)
+            VALUES (2,'replacement-interrupt','thread',${threadId},1,'thread.turn-start-requested','2026-10-03T00:00:00.000Z','user','{}','{}')`.pipe(
+              Effect.orDie,
+            );
+            yield* Deferred.succeed(releaseRoute, undefined);
+            assert.isTrue(Exit.isFailure(yield* Fiber.join(interruption)));
+            assert.equal(adapter.interruptTurn.mock.calls.length, 0);
+            assert.equal(adapter.stopSession.mock.calls.length, 0);
+          }),
+      });
     }).pipe(Effect.provide(NodeServices.layer)),
   );
 

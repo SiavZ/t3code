@@ -8,6 +8,8 @@ import {
 import * as Schema from "effect/Schema";
 import * as Rpc from "effect/unstable/rpc/Rpc";
 import * as RpcGroup from "effect/unstable/rpc/RpcGroup";
+import * as Scheduled from "./scheduledWork.ts";
+import * as Grants from "./unattendedGrants.ts";
 import {
   WorkerSpawnInput,
   WorkerListInput,
@@ -300,6 +302,9 @@ import {
 import { VcsError } from "./vcs.ts";
 
 export const WS_METHODS = {
+  unattendedGrantCreate: "unattendedGrants.create",
+  unattendedGrantList: "unattendedGrants.list",
+  unattendedGrantRevoke: "unattendedGrants.revoke",
   workersSpawn: "workers.spawn",
   workersList: "workers.list",
   workersGet: "workers.get",
@@ -1500,7 +1505,27 @@ const WsWorkersWaitRpc = Rpc.make(WS_METHODS.workersWait, {
   error: workerRpcError,
 });
 
-export const WsRpcGroup = RpcGroup.make(
+// Parity tool RPCs live in their own group. One group holding every RPC exceeds the
+// compiler's instantiation depth in the server's handler layer.
+export const ParityToolsRpcGroup = RpcGroup.make(
+  Rpc.make(WS_METHODS.unattendedGrantCreate, {
+    payload: Grants.UnattendedGrantCreateInput,
+    success: Grants.UnattendedGrant,
+    error: Schema.Union([Scheduled.ScheduledWorkError, EnvironmentAuthorizationError]),
+  }),
+  Rpc.make(WS_METHODS.unattendedGrantList, {
+    payload: Scheduled.ScheduledWorkListInput,
+    success: Schema.Array(Grants.UnattendedGrant),
+    error: Schema.Union([Scheduled.ScheduledWorkError, EnvironmentAuthorizationError]),
+  }),
+  Rpc.make(WS_METHODS.unattendedGrantRevoke, {
+    payload: Grants.UnattendedGrantReadInput,
+    success: Grants.UnattendedGrant,
+    error: Schema.Union([Scheduled.ScheduledWorkError, EnvironmentAuthorizationError]),
+  }),
+);
+
+export const WsCoreRpcGroup = RpcGroup.make(
   WsWorkersSpawnRpc,
   WsWorkersListRpc,
   WsWorkersGetRpc,
@@ -1657,4 +1682,9 @@ export const WsRpcGroup = RpcGroup.make(
   WsOrchestrationGetArchivedShellSnapshotRpc,
   WsOrchestrationSubscribeShellRpc,
   WsOrchestrationSubscribeThreadRpc,
+);
+
+export const WsRpcGroup = RpcGroup.make(
+  ...WsCoreRpcGroup.requests.values(),
+  ...ParityToolsRpcGroup.requests.values(),
 );

@@ -350,7 +350,13 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         });
       }
       const rootThreadId = caller.worker?.rootThreadId ?? caller.id;
-      const runtimeMode = caller.runtimeMode;
+      const runtimeMode = command.runtimeModeCeiling ?? caller.runtimeMode;
+      if (!isWorkerRuntimeModeAllowed(runtimeMode, caller.runtimeMode))
+        return yield* new WorkerOperationError({
+          operation: "spawn",
+          code: "forbidden",
+          detail: "Requested worker runtime ceiling exceeds its owner.",
+        });
       yield* requireWorkerAdmission(rootThreadId, workerStates ?? [], "spawn");
       if (
         caller.worker &&
@@ -382,6 +388,9 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           },
           {
             type: "thread.turn.start",
+            ...(command.unattendedAuthority !== undefined
+              ? { unattendedAuthority: command.unattendedAuthority }
+              : {}),
             commandId: command.commandId,
             threadId: command.threadId,
             message: {
@@ -431,6 +440,15 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
       }
       const thread = yield* requireThread({ readModel, command, threadId: command.threadId });
       yield* requireOwnedWorker(readModel, command.callerThreadId, thread, "send");
+      if (
+        command.runtimeModeCeiling !== undefined &&
+        !isWorkerRuntimeModeAllowed(command.runtimeModeCeiling, thread.runtimeMode)
+      )
+        return yield* new WorkerOperationError({
+          operation: "send",
+          code: "forbidden",
+          detail: "Worker continuation cannot widen its existing runtime ceiling.",
+        });
       return yield* decideOrchestrationCommand({
         readModel,
         ...(workerStates !== undefined ? { workerStates } : {}),
@@ -445,7 +463,10 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
             attachments: [],
           },
           modelSelection: thread.modelSelection,
-          runtimeMode: thread.runtimeMode,
+          runtimeMode: command.runtimeModeCeiling ?? thread.runtimeMode,
+          ...(command.unattendedAuthority !== undefined
+            ? { unattendedAuthority: command.unattendedAuthority }
+            : {}),
           interactionMode: thread.interactionMode,
           createdAt: command.createdAt,
         },
@@ -1762,6 +1783,9 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         ...(userMessageEvent ? { causationEventId: userMessageEvent.eventId } : {}),
         type: "thread.turn-start-requested",
         payload: {
+          ...(command.unattendedAuthority !== undefined
+            ? { unattendedAuthority: command.unattendedAuthority }
+            : {}),
           threadId: command.threadId,
           messageId: command.message.messageId,
           ...(command.modelSelection !== undefined
@@ -1877,6 +1901,12 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         type: "thread.turn-interrupt-requested",
         payload: {
           threadId: command.threadId,
+          ...(command.expectedMessageId !== undefined
+            ? { expectedMessageId: command.expectedMessageId }
+            : {}),
+          ...(command.expectedTurnId !== undefined
+            ? { expectedTurnId: command.expectedTurnId }
+            : {}),
           ...(command.turnId !== undefined ? { turnId: command.turnId } : {}),
           createdAt: command.createdAt,
         },
@@ -2172,6 +2202,12 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         type: "thread.session-stop-requested",
         payload: {
           threadId: command.threadId,
+          ...(command.expectedMessageId !== undefined
+            ? { expectedMessageId: command.expectedMessageId }
+            : {}),
+          ...(command.expectedTurnId !== undefined
+            ? { expectedTurnId: command.expectedTurnId }
+            : {}),
           createdAt: command.createdAt,
         },
       };

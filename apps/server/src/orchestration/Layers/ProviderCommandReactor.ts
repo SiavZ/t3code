@@ -1,9 +1,15 @@
+import { NativeUnattendedActivation } from "../nativeUnattendedAuthority.ts";
+import {
+  makeActivationCancellationFence,
+  NativeActivationCancellation,
+} from "../activationCancellationFence.ts";
 import { withWorkspaceLease } from "../../workspace/workspaceLease.ts";
 import {
   type ChatAttachment,
   CommandId,
   EventId,
   type ModelSelection,
+  type MessageId,
   type OrchestrationEvent,
   ProviderDriverKind,
   type ProjectId,
@@ -213,6 +219,7 @@ function buildGeneratedWorktreeBranchName(raw: string): string {
 }
 
 const make = Effect.gen(function* () {
+  const activationFence = yield* makeActivationCancellationFence;
   const crypto = yield* Crypto.Crypto;
   const orchestrationEngine = yield* OrchestrationEngineService;
   const projectionSnapshotQuery = yield* ProjectionSnapshotQuery;
@@ -256,6 +263,16 @@ const make = Effect.gen(function* () {
   const compactingThreadIds = new Set<ThreadId>();
   type QueuedTurnStart = Extract<ProviderIntentEvent, { type: "thread.turn-start-requested" }>;
   // Turn starts received while a thread compacts, replayed in order once its session is restored.
+  const withActivationOrigin = <A, E, R>(event: QueuedTurnStart, effect: Effect.Effect<A, E, R>) =>
+    event.payload.unattendedAuthority
+      ? effect.pipe(
+          Effect.provideService(NativeUnattendedActivation, {
+            messageId: event.payload.messageId,
+            sequence: event.sequence,
+            authority: event.payload.unattendedAuthority,
+          }),
+        )
+      : effect;
   const turnsAfterCompaction = new Map<ThreadId, Array<QueuedTurnStart>>();
   // Replay command id → the queued turn start it re-requests. `sent` settles once the replay's
   // provider send finishes, which is what lets the next queued turn follow it in order.
@@ -396,6 +413,8 @@ const make = Effect.gen(function* () {
     readonly threadId: ThreadId;
     readonly session: OrchestrationSession;
     readonly createdAt: string;
+    readonly expectedMessageId?: MessageId | undefined;
+    readonly expectedActivationSequence?: number | undefined;
   }) =>
     serverCommandId("provider-session-set").pipe(
       Effect.flatMap((commandId) =>
@@ -404,6 +423,10 @@ const make = Effect.gen(function* () {
           commandId,
           threadId: input.threadId,
           session: input.session,
+          ...(input.expectedMessageId ? { expectedMessageId: input.expectedMessageId } : {}),
+          ...(input.expectedActivationSequence !== undefined
+            ? { expectedActivationSequence: input.expectedActivationSequence }
+            : {}),
           createdAt: input.createdAt,
         }),
       ),
@@ -578,6 +601,7 @@ const make = Effect.gen(function* () {
     options?: {
       readonly modelSelection?: ModelSelection;
       readonly pendingTurnStart?: boolean;
+      readonly activationMessageId?: import("@t3tools/contracts").MessageId;
       // First-turn prompt seed. A manual title that still equals this seed was
       // written by the client's auto-title, not a user rename.
       readonly titleSeed?: string;
@@ -588,7 +612,13 @@ const make = Effect.gen(function* () {
       return yield* Effect.die(new Error(`Thread '${threadId}' was not found in read model.`));
     }
 
-    const desiredRuntimeMode = thread.runtimeMode;
+    const capturedAuthority = yield* Effect.serviceOption(NativeUnattendedActivation);
+    const desiredRuntimeMode =
+      thread.runtimeMode === "full-access" &&
+      Option.isSome(capturedAuthority) &&
+      capturedAuthority.value.authority.runtimeModeCeiling === "approval-required"
+        ? "approval-required"
+        : thread.runtimeMode;
     const requestedModelSelection = options?.modelSelection;
     const resolveActiveSession = (threadId: ThreadId) =>
       providerService
@@ -732,18 +762,25 @@ const make = Effect.gen(function* () {
       readonly resumeCursor?: unknown;
       readonly provider?: ProviderDriverKind;
     }) =>
-      providerService
-        .startSession(threadId, {
-          threadId,
-          ...(preferredProvider ? { provider: preferredProvider } : {}),
-          providerInstanceId: desiredInstanceId,
-          ...(effectiveCwd ? { cwd: effectiveCwd } : {}),
-          ...(sessionTitle ? { title: sessionTitle } : {}),
-          modelSelection: desiredModelSelection,
-          ...(input?.resumeCursor !== undefined ? { resumeCursor: input.resumeCursor } : {}),
-          runtimeMode: desiredRuntimeMode,
-        })
-        .pipe(Effect.tap(() => refreshWorkspaceSnapshot));
+      Effect.gen(function* () {
+        if (
+          options?.activationMessageId &&
+          (yield* activationFence.cancelled(threadId, options.activationMessageId))
+        )
+          return yield* Effect.interrupt;
+        return yield* providerService
+          .startSession(threadId, {
+            threadId,
+            ...(preferredProvider ? { provider: preferredProvider } : {}),
+            providerInstanceId: desiredInstanceId,
+            ...(effectiveCwd ? { cwd: effectiveCwd } : {}),
+            ...(sessionTitle ? { title: sessionTitle } : {}),
+            modelSelection: desiredModelSelection,
+            ...(input?.resumeCursor !== undefined ? { resumeCursor: input.resumeCursor } : {}),
+            runtimeMode: desiredRuntimeMode,
+          })
+          .pipe(Effect.tap(() => refreshWorkspaceSnapshot));
+      });
 
     const bindSessionToThread = (session: ProviderSession) =>
       Effect.gen(function* () {
@@ -855,6 +892,7 @@ const make = Effect.gen(function* () {
     readonly interactionMode?: "default" | "plan";
     readonly createdAt: string;
     readonly titleSeed?: string;
+    readonly activationMessageId?: import("@t3tools/contracts").MessageId;
   }) {
     const thread = yield* resolveThreadShell(input.threadId);
     if (!thread) {
@@ -866,6 +904,7 @@ const make = Effect.gen(function* () {
       ...(input.modelSelection !== undefined ? { modelSelection: input.modelSelection } : {}),
       ...(input.titleSeed !== undefined ? { titleSeed: input.titleSeed } : {}),
       pendingTurnStart: true,
+      ...(input.activationMessageId ? { activationMessageId: input.activationMessageId } : {}),
     });
     if (input.modelSelection !== undefined) {
       threadModelSelections.set(input.threadId, input.modelSelection);
@@ -1227,6 +1266,7 @@ const make = Effect.gen(function* () {
       receivedEvent.commandId !== null ? resumedTurnStarts.get(receivedEvent.commandId) : undefined;
     const event = resumed ? { ...receivedEvent, payload: resumed.event.payload } : receivedEvent;
     const key = turnStartKeyForEvent(event);
+    if (yield* activationFence.cancelled(event.payload.threadId, event.payload.messageId)) return;
     if (yield* hasHandledTurnStartRecently(key)) {
       return;
     }
@@ -1496,26 +1536,30 @@ const make = Effect.gen(function* () {
       turnsAfterCompaction.set(event.payload.threadId, queued);
       return;
     }
-    const sendTurnRequest = yield* buildSendTurnRequestForThread({
-      threadId: event.payload.threadId,
-      messageText: projectComposerContextForProvider({
-        text: message.text,
-        records: message.context?.records ?? [],
-      }),
-      ...(message.attachments !== undefined ? { attachments: message.attachments } : {}),
-      ...(event.payload.modelSelection !== undefined
-        ? { modelSelection: event.payload.modelSelection }
-        : {}),
-      interactionMode: event.payload.interactionMode,
-      createdAt: event.payload.createdAt,
-      // Later turns must not reuse the current title as titleSeed. Only the
-      // first prompt seed should suppress a not-yet-renamed session title.
-      ...(!hasOtherUserMessages && event.payload.titleSeed !== undefined
-        ? { titleSeed: event.payload.titleSeed }
-        : {}),
-    }).pipe(
-      Effect.asSome,
-      Effect.catchCause((cause) => handleTurnStartFailure(cause).pipe(Effect.as(Option.none()))),
+    const sendTurnRequest = yield* withActivationOrigin(
+      event,
+      buildSendTurnRequestForThread({
+        activationMessageId: event.payload.messageId,
+        threadId: event.payload.threadId,
+        messageText: projectComposerContextForProvider({
+          text: message.text,
+          records: message.context?.records ?? [],
+        }),
+        ...(message.attachments !== undefined ? { attachments: message.attachments } : {}),
+        ...(event.payload.modelSelection !== undefined
+          ? { modelSelection: event.payload.modelSelection }
+          : {}),
+        interactionMode: event.payload.interactionMode,
+        createdAt: event.payload.createdAt,
+        // Later turns must not reuse the current title as titleSeed. Only the
+        // first prompt seed should suppress a not-yet-renamed session title.
+        ...(!hasOtherUserMessages && event.payload.titleSeed !== undefined
+          ? { titleSeed: event.payload.titleSeed }
+          : {}),
+      }).pipe(
+        Effect.asSome,
+        Effect.catchCause((cause) => handleTurnStartFailure(cause).pipe(Effect.as(Option.none()))),
+      ),
     );
 
     if (Option.isNone(sendTurnRequest)) {
@@ -1531,12 +1575,20 @@ const make = Effect.gen(function* () {
       return;
     }
 
-    const send = Effect.gen(function* () {
-      const current = yield* resolveThreadShell(event.payload.threadId);
-      if (thread.worker && (!current || event.sequence <= (current.worker?.lastStopSequence ?? -1)))
-        return;
-      yield* providerService.sendTurn(sendTurnRequest.value);
-    }).pipe(Effect.asVoid, Effect.catchCause(recoverTurnStartFailure));
+    const send = withActivationOrigin(
+      event,
+      Effect.gen(function* () {
+        if (yield* activationFence.cancelled(event.payload.threadId, event.payload.messageId))
+          return;
+        const current = yield* resolveThreadShell(event.payload.threadId);
+        if (
+          thread.worker &&
+          (!current || event.sequence <= (current.worker?.lastStopSequence ?? -1))
+        )
+          return;
+        yield* providerService.sendTurn(sendTurnRequest.value);
+      }).pipe(Effect.asVoid, Effect.catchCause(recoverTurnStartFailure)),
+    );
     // The forked send settles `sent` from here on, so drop the entry the post-processing hook uses.
     if (resumed && event.commandId !== null) resumedTurnStarts.delete(event.commandId);
     const finish = resumed ? Deferred.succeed(resumed.sent, undefined) : Effect.void;
@@ -1564,9 +1616,25 @@ const make = Effect.gen(function* () {
     yield* send.pipe(Effect.ensuring(finish), Effect.forkScoped);
   });
 
+  const withCancellationOrigin = <A, E, R>(
+    event: Extract<
+      ProviderIntentEvent,
+      { type: "thread.turn-interrupt-requested" | "thread.session-stop-requested" }
+    >,
+    effect: Effect.Effect<A, E, R>,
+  ) =>
+    event.payload.expectedMessageId !== undefined || event.payload.expectedTurnId !== undefined
+      ? effect.pipe(
+          Effect.provideService(NativeActivationCancellation, {
+            ...event.payload,
+            sequence: event.sequence,
+          }),
+        )
+      : effect;
   const processTurnInterruptRequested = Effect.fn("processTurnInterruptRequested")(function* (
     event: Extract<ProviderIntentEvent, { type: "thread.turn-interrupt-requested" }>,
   ) {
+    if (!(yield* activationFence.canCancel({ ...event.payload, sequence: event.sequence }))) return;
     yield* cancelTurnsAfterCompaction(
       event.payload.threadId,
       "Context compaction was interrupted. Send this message again to continue.",
@@ -1607,7 +1675,13 @@ const make = Effect.gen(function* () {
           return;
         }
 
-        yield* providerService.stopSession({ threadId: event.payload.threadId }).pipe(
+        if (!(yield* activationFence.canCancel({ ...event.payload, sequence: event.sequence })))
+          return;
+        const stopAcknowledged = yield* withCancellationOrigin(
+          event,
+          providerService.stopSession({ threadId: event.payload.threadId }),
+        ).pipe(
+          Effect.as(true),
           Effect.catchCause((stopCause) => {
             if (Cause.hasInterruptsOnly(stopCause)) {
               return Effect.interrupt;
@@ -1619,9 +1693,14 @@ const make = Effect.gen(function* () {
                 cause: Cause.pretty(stopCause),
                 originalCause: Cause.pretty(cause),
               },
-            );
+            ).pipe(Effect.as(false));
           }),
         );
+        if (
+          !stopAcknowledged ||
+          !(yield* activationFence.canCancel({ ...event.payload, sequence: event.sequence }))
+        )
+          return;
         const stoppedThread = yield* resolveThreadShell(event.payload.threadId);
         const stoppedSession = stoppedThread?.session;
         if (
@@ -1635,8 +1714,16 @@ const make = Effect.gen(function* () {
           return;
         }
 
+        if (!(yield* activationFence.canCancel({ ...event.payload, sequence: event.sequence })))
+          return;
         yield* setThreadSession({
           threadId: event.payload.threadId,
+          ...(event.payload.expectedMessageId
+            ? { expectedMessageId: event.payload.expectedMessageId }
+            : {}),
+          ...(event.payload.expectedMessageId || event.payload.expectedTurnId
+            ? { expectedActivationSequence: event.sequence }
+            : {}),
           session: {
             ...stoppedSession,
             status: "stopped",
@@ -1658,9 +1745,11 @@ const make = Effect.gen(function* () {
     };
 
     // Orchestration turn ids are not provider turn ids, so interrupt by session.
-    yield* providerService
-      .interruptTurn({ threadId: event.payload.threadId })
-      .pipe(Effect.catchCause(recoverInterruptFailure));
+    if (!(yield* activationFence.canCancel({ ...event.payload, sequence: event.sequence }))) return;
+    yield* withCancellationOrigin(
+      event,
+      providerService.interruptTurn({ threadId: event.payload.threadId }),
+    ).pipe(Effect.catchCause(recoverInterruptFailure));
   });
 
   const processApprovalResponseRequested = Effect.fn("processApprovalResponseRequested")(function* (
@@ -1757,6 +1846,7 @@ const make = Effect.gen(function* () {
   const processSessionStopRequested = Effect.fn("processSessionStopRequested")(function* (
     event: Extract<ProviderIntentEvent, { type: "thread.session-stop-requested" }>,
   ) {
+    if (!(yield* activationFence.canCancel({ ...event.payload, sequence: event.sequence }))) return;
     const thread = yield* resolveThreadShell(event.payload.threadId);
     if (!thread) {
       return;
@@ -1774,7 +1864,16 @@ const make = Effect.gen(function* () {
     ).pipe(
       Effect.andThen(
         thread.session && thread.session.status !== "stopped"
-          ? providerService.stopSession({ threadId: thread.id })
+          ? Effect.gen(function* () {
+              if (
+                !(yield* activationFence.canCancel({ ...event.payload, sequence: event.sequence }))
+              )
+                return yield* Effect.interrupt;
+              yield* withCancellationOrigin(
+                event,
+                providerService.stopSession({ threadId: thread.id }),
+              );
+            })
           : Effect.void,
       ),
       Effect.matchCauseEffect({
@@ -1803,22 +1902,34 @@ const make = Effect.gen(function* () {
           );
         },
         onSuccess: () =>
-          setThreadSession({
-            threadId: thread.id,
-            session: {
-              threadId: thread.id,
-              status: "stopped",
-              providerName: thread.session?.providerName ?? null,
-              ...(thread.session?.providerInstanceId !== undefined
-                ? { providerInstanceId: thread.session.providerInstanceId }
-                : {}),
-              runtimeMode: thread.session?.runtimeMode ?? DEFAULT_RUNTIME_MODE,
-              activeTurnId: null,
-              lastError: thread.session?.lastError ?? null,
-              updatedAt: now,
-            },
-            createdAt: now,
-          }),
+          activationFence.canCancel({ ...event.payload, sequence: event.sequence }).pipe(
+            Effect.flatMap((allowed) =>
+              allowed
+                ? setThreadSession({
+                    threadId: thread.id,
+                    ...(event.payload.expectedMessageId
+                      ? { expectedMessageId: event.payload.expectedMessageId }
+                      : {}),
+                    ...(event.payload.expectedMessageId || event.payload.expectedTurnId
+                      ? { expectedActivationSequence: event.sequence }
+                      : {}),
+                    session: {
+                      threadId: thread.id,
+                      status: "stopped",
+                      providerName: thread.session?.providerName ?? null,
+                      ...(thread.session?.providerInstanceId !== undefined
+                        ? { providerInstanceId: thread.session.providerInstanceId }
+                        : {}),
+                      runtimeMode: thread.session?.runtimeMode ?? DEFAULT_RUNTIME_MODE,
+                      activeTurnId: null,
+                      lastError: thread.session?.lastError ?? null,
+                      updatedAt: now,
+                    },
+                    createdAt: now,
+                  })
+                : Effect.void,
+            ),
+          ),
       }),
       Effect.ensuring(clearStopping),
     );

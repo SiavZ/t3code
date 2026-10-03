@@ -13,6 +13,7 @@ import {
 } from "@t3tools/contracts";
 import { createModelSelection } from "@t3tools/shared/model";
 import {
+  CheckpointRef,
   ApprovalRequestId,
   CommandId,
   ComposerContextId,
@@ -52,6 +53,18 @@ import {
   ProviderService,
   type ProviderServiceShape,
 } from "../../provider/Services/ProviderService.ts";
+import { makeProviderServiceLive } from "../../provider/Layers/ProviderService.ts";
+import { ProviderSessionDirectoryLive } from "../../provider/Layers/ProviderSessionDirectory.ts";
+import * as ProviderSessionRuntime from "../../persistence/ProviderSessionRuntime.ts";
+import { ProviderAdapterRegistry } from "../../provider/Services/ProviderAdapterRegistry.ts";
+import type { ProviderAdapterShape } from "../../provider/Services/ProviderAdapter.ts";
+import { makeAdapterRegistryMock } from "../../provider/testUtils/providerAdapterRegistryMock.ts";
+import { AnalyticsService } from "../../telemetry/AnalyticsService.ts";
+import {
+  NoOpProviderEventLoggers,
+  ProviderEventLoggers,
+} from "../../provider/Layers/ProviderEventLoggers.ts";
+import { makeTestProviderAdapterHarness } from "../../../integration/TestProviderAdapter.integration.ts";
 import { ProviderAuthService } from "../../provider/Services/ProviderAuthService.ts";
 import { makeProviderRegistryLayer } from "../../provider/testUtils/providerRegistryMock.ts";
 import { TextGeneration } from "../../textGeneration/TextGeneration.ts";
@@ -172,6 +185,9 @@ describe("ProviderCommandReactor", () => {
     readonly initialTitle?: string;
     readonly deferReactorStart?: boolean;
     readonly threadModelSelection?: ModelSelection;
+    readonly nativeAdapter?: ProviderAdapterShape<
+      import("../../provider/Errors.ts").ProviderAdapterError
+    >;
     readonly sessionModelSwitch?: "unsupported" | "in-session";
     readonly requiresNewThreadForModelChange?: boolean;
     readonly unreadableHistory?: boolean;
@@ -465,7 +481,26 @@ describe("ProviderCommandReactor", () => {
     const layer = ProviderCommandReactorLive.pipe(
       Layer.provideMerge(reactorOrchestrationLayer),
       Layer.provideMerge(projectionSnapshotLayer),
-      Layer.provideMerge(Layer.succeed(ProviderService, service)),
+      Layer.provideMerge(
+        input?.nativeAdapter
+          ? makeProviderServiceLive().pipe(
+              Layer.provide(
+                ProviderSessionDirectoryLive.pipe(Layer.provide(ProviderSessionRuntime.layer)),
+              ),
+              Layer.provide(
+                Layer.succeed(
+                  ProviderAdapterRegistry,
+                  makeAdapterRegistryMock({
+                    [ProviderDriverKind.make("codex")]: input.nativeAdapter,
+                  }),
+                ),
+              ),
+              Layer.provide(AnalyticsService.layerTest),
+              Layer.provide(Layer.succeed(ProviderEventLoggers, NoOpProviderEventLoggers)),
+              Layer.provide(projectionSnapshotLayer),
+            )
+          : Layer.succeed(ProviderService, service),
+      ),
       Layer.provide(Layer.mock(ProviderAuthService, { tryHandlePromptCommand })),
       Layer.provideMerge(makeProviderRegistryLayer(providerSnapshots as never)),
       Layer.provideMerge(
@@ -503,7 +538,8 @@ describe("ProviderCommandReactor", () => {
     const engine = await runtime.runPromise(Effect.service(OrchestrationEngineService));
     const snapshotQuery = await runtime.runPromise(Effect.service(ProjectionSnapshotQuery));
     const reactor = await runtime.runPromise(Effect.service(ProviderCommandReactor));
-    const runEffect = <A, E>(effect: Effect.Effect<A, E>) => runtime!.runPromise(effect);
+    const runEffect = <A, E>(effect: Effect.Effect<A, E, SqlClient.SqlClient>) =>
+      runtime!.runPromise(effect);
 
     await Effect.runPromise(
       engine.dispatch({
@@ -511,7 +547,7 @@ describe("ProviderCommandReactor", () => {
         commandId: CommandId.make("cmd-project-create"),
         projectId: asProjectId("project-1"),
         title: "Provider Project",
-        workspaceRoot: "/tmp/provider-project",
+        workspaceRoot: input?.nativeAdapter ? baseDir : "/tmp/provider-project",
         defaultModelSelection: modelSelection,
         createdAt: now,
       }),
@@ -638,6 +674,191 @@ describe("ProviderCommandReactor", () => {
       },
     };
   }
+
+  effectIt.effect("suppresses a cancelled accepted startup before any native activation", () =>
+    Effect.gen(function* () {
+      const activation = yield* Deferred.make<void>();
+      const harness = yield* Effect.promise(() =>
+        createHarness({ serverActivation: Deferred.await(activation) }),
+      );
+      const threadId = ThreadId.make("thread-1");
+      const messageId = asMessageId("scheduled-cancelled-before-start");
+      const now = "2026-01-01T00:00:00.000Z";
+      yield* harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.make("cancel-before-start"),
+        threadId,
+        message: { messageId, role: "user", text: "Scheduled work", attachments: [] },
+        runtimeMode: "approval-required",
+        interactionMode: "default",
+        createdAt: now,
+      });
+      yield* harness.engine.dispatch({
+        type: "thread.turn.interrupt",
+        commandId: CommandId.make("cancel-accepted-before-start"),
+        threadId,
+        expectedMessageId: messageId,
+        createdAt: now,
+      });
+      yield* Deferred.succeed(activation, undefined);
+      yield* Effect.promise(() => harness.drain());
+      expect(harness.startSession).not.toHaveBeenCalled();
+      expect(harness.sendTurn).not.toHaveBeenCalled();
+      expect(harness.interruptTurn).not.toHaveBeenCalled();
+    }),
+  );
+
+  effectIt.effect("a later foreground start fences queued conditional native interruption", () =>
+    Effect.gen(function* () {
+      const activation = yield* Deferred.make<void>();
+      const harness = yield* Effect.promise(() =>
+        createHarness({ serverActivation: Deferred.await(activation) }),
+      );
+      const threadId = ThreadId.make("thread-1");
+      const messageId = asMessageId("scheduled-stale-cancel");
+      const now = "2026-01-01T00:00:00.000Z";
+      yield* harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.make("stale-cancel-start"),
+        threadId,
+        message: { messageId, role: "user", text: "Scheduled work", attachments: [] },
+        runtimeMode: "approval-required",
+        interactionMode: "default",
+        createdAt: now,
+      });
+      yield* harness.engine.dispatch({
+        type: "thread.turn.interrupt",
+        commandId: CommandId.make("stale-cancel-interrupt"),
+        threadId,
+        expectedMessageId: messageId,
+        createdAt: now,
+      });
+      yield* harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.make("new-foreground-after-cancel"),
+        threadId,
+        message: {
+          messageId: asMessageId("foreground-after-cancel"),
+          role: "user",
+          text: "Foreground work",
+          attachments: [],
+        },
+        runtimeMode: "approval-required",
+        interactionMode: "default",
+        createdAt: now,
+      });
+      yield* Deferred.succeed(activation, undefined);
+      yield* Effect.promise(() => harness.drain());
+      expect(harness.interruptTurn).not.toHaveBeenCalled();
+      expect(harness.stopSession).not.toHaveBeenCalled();
+    }),
+  );
+
+  effectIt.effect(
+    "a failed conditional fallback stop never marks a later foreground session stopped",
+    () =>
+      Effect.gen(function* () {
+        const entered = yield* Deferred.make<void>();
+        const release = yield* Deferred.make<void>();
+        const harness = yield* Effect.promise(() =>
+          createHarness({
+            interruptTurnEffect: () =>
+              Effect.fail(
+                new ProviderAdapterRequestError({
+                  provider: "codex",
+                  method: "thread.interrupt",
+                  detail: "interrupt failed",
+                }),
+              ),
+            stopSessionEffect: () =>
+              Deferred.succeed(entered, undefined).pipe(
+                Effect.andThen(Deferred.await(release)),
+                Effect.andThen(
+                  Effect.fail(
+                    new ProviderAdapterRequestError({
+                      provider: "codex",
+                      method: "session.stop",
+                      detail: "stale stop refused",
+                    }),
+                  ),
+                ),
+              ),
+          }),
+        );
+        const threadId = ThreadId.make("thread-1");
+        const now = "2026-01-01T00:00:00.000Z";
+        const messageId = asMessageId("fallback-A");
+        yield* harness.engine.dispatch({
+          type: "thread.turn.start",
+          commandId: CommandId.make("fallback-start-A"),
+          threadId,
+          message: { messageId, role: "user", text: "A", attachments: [] },
+          runtimeMode: "approval-required",
+          interactionMode: "default",
+          createdAt: now,
+        });
+        yield* Effect.promise(() => harness.drain());
+        yield* harness.engine.dispatch({
+          type: "thread.session.set",
+          commandId: CommandId.make("fallback-session-A"),
+          threadId,
+          session: {
+            threadId,
+            status: "running",
+            providerName: "codex",
+            runtimeMode: "approval-required",
+            activeTurnId: asTurnId("native-A"),
+            lastError: null,
+            updatedAt: now,
+          },
+          createdAt: now,
+        });
+        yield* harness.engine.dispatch({
+          type: "thread.turn.interrupt",
+          commandId: CommandId.make("fallback-cancel-A"),
+          threadId,
+          expectedMessageId: messageId,
+          createdAt: now,
+        });
+        yield* Deferred.await(entered);
+        yield* harness.engine.dispatch({
+          type: "thread.turn.start",
+          commandId: CommandId.make("fallback-start-B"),
+          threadId,
+          message: {
+            messageId: asMessageId("fallback-B"),
+            role: "user",
+            text: "B",
+            attachments: [],
+          },
+          runtimeMode: "approval-required",
+          interactionMode: "default",
+          createdAt: now,
+        });
+        yield* harness.engine.dispatch({
+          type: "thread.session.set",
+          commandId: CommandId.make("fallback-session-B"),
+          threadId,
+          session: {
+            threadId,
+            status: "running",
+            providerName: "codex",
+            runtimeMode: "approval-required",
+            activeTurnId: asTurnId("native-B"),
+            lastError: null,
+            updatedAt: now,
+          },
+          createdAt: now,
+        });
+        yield* Deferred.succeed(release, undefined);
+        yield* Effect.promise(() => harness.drain());
+        const thread = (yield* Effect.promise(() => harness.readModel())).threads.find(
+          (entry) => entry.id === threadId,
+        );
+        expect(thread?.session?.status).not.toBe("stopped");
+        expect(thread?.session?.lastError).not.toBe("interrupt failed");
+      }),
+  );
 
   effectIt.effect.each(["new", "ready", "stopped"] as const)(
     "handles sign-out for a %s thread before worktree repair, text helpers, or startup",
@@ -3536,6 +3757,155 @@ describe("ProviderCommandReactor", () => {
       ),
     });
   });
+
+  effectIt.effect(
+    "supervised idle full-access worker restarts restricted after native stop acknowledgement",
+    () =>
+      Effect.gen(function* () {
+        const fixture = yield* makeTestProviderAdapterHarness();
+        yield* fixture.queueTurnResponseForNextSession({ events: [] });
+        const stopEntered = yield* Deferred.make<void>();
+        const releaseStop = yield* Deferred.make<void>();
+        const restrictedSent = yield* Deferred.make<void>();
+        const fullSent = yield* Deferred.make<void>();
+        const calls: string[] = [];
+        const adapter: typeof fixture.adapter = {
+          ...fixture.adapter,
+          startSession: (input) =>
+            Effect.gen(function* () {
+              if (yield* fixture.adapter.hasSession(input.threadId)) {
+                calls.push("stop-entered");
+                yield* Deferred.succeed(stopEntered, undefined);
+                yield* Deferred.await(releaseStop);
+                yield* fixture.adapter.stopSession(input.threadId);
+                calls.push("stop-acknowledged");
+              }
+              calls.push(`start:${input.runtimeMode}`);
+              return yield* fixture.adapter.startSession(input);
+            }),
+          sendTurn: (input) =>
+            Effect.gen(function* () {
+              const sessions = yield* fixture.adapter.listSessions();
+              calls.push(
+                `send:${sessions.find((entry) => entry.threadId === input.threadId)?.runtimeMode}`,
+              );
+              const result = yield* fixture.adapter.sendTurn(input);
+              if (
+                sessions.find((entry) => entry.threadId === input.threadId)?.runtimeMode ===
+                "approval-required"
+              )
+                yield* Deferred.succeed(restrictedSent, undefined);
+              else yield* Deferred.succeed(fullSent, undefined);
+              return result;
+            }),
+        };
+        const harness = yield* Effect.promise(() => createHarness({ nativeAdapter: adapter }));
+        const owner = ThreadId.make("thread-1");
+        const worker = ThreadId.make("stop-race-worker");
+        const now = "2026-01-01T00:00:00.000Z";
+        yield* harness.engine.dispatch({
+          type: "thread.runtime-mode.set",
+          commandId: CommandId.make("full-owner"),
+          threadId: owner,
+          runtimeMode: "full-access",
+          createdAt: now,
+        });
+        yield* Effect.promise(() => harness.drain());
+        yield* spawnTestWorker(harness);
+        yield* Deferred.await(fullSent);
+        yield* Effect.promise(() => harness.drain());
+        expect(calls).toEqual(["start:full-access", "send:full-access"]);
+        yield* harness.engine.dispatch({
+          type: "thread.session.set",
+          commandId: CommandId.make("running-full-worker"),
+          threadId: worker,
+          session: {
+            threadId: worker,
+            status: "running",
+            providerName: ProviderDriverKind.make("codex"),
+            providerInstanceId: ProviderInstanceId.make("codex"),
+            runtimeMode: "full-access",
+            activeTurnId: TurnId.make("turn-1"),
+            lastError: null,
+            updatedAt: now,
+          },
+          createdAt: now,
+        });
+        yield* harness.engine.dispatch({
+          type: "thread.session.set",
+          commandId: CommandId.make("idle-full-worker"),
+          threadId: worker,
+          session: {
+            threadId: worker,
+            status: "ready",
+            providerName: ProviderDriverKind.make("codex"),
+            providerInstanceId: ProviderInstanceId.make("codex"),
+            runtimeMode: "full-access",
+            activeTurnId: null,
+            lastError: null,
+            updatedAt: now,
+          },
+          createdAt: now,
+        });
+        yield* harness.engine.dispatch({
+          type: "thread.turn.diff.complete",
+          commandId: CommandId.make("full-worker-complete"),
+          threadId: worker,
+          turnId: TurnId.make("turn-1"),
+          completedAt: now,
+          checkpointRef: CheckpointRef.make("refs/t3/checkpoints/full-worker"),
+          status: "ready",
+          files: [],
+          checkpointTurnCount: 1,
+          createdAt: now,
+        });
+        yield* Effect.promise(() => harness.drain());
+        yield* Effect.promise(() =>
+          harness.runEffect(
+            Effect.gen(function* () {
+              const sql = yield* SqlClient.SqlClient;
+              yield* sql`INSERT INTO unattended_grants(grant_id,owner_thread_id,project_id,revision,revoked,ceiling_json,host_jobs,created_at) VALUES('supervised-followup',${owner},'project-1',1,0,${JSON.stringify({ runtimeMode: "approval-required", mcpCapabilities: ["workers", "pull-requests"] })},0,${now})`;
+            }),
+          ),
+        );
+        yield* harness.engine.dispatch({
+          type: "thread.worker.send",
+          commandId: CommandId.make("supervised-followup"),
+          threadId: worker,
+          callerThreadId: owner,
+          text: "Continue under supervision",
+          runtimeModeCeiling: "approval-required",
+          unattendedAuthority: {
+            grantId: "supervised-followup",
+            grantRevision: 1,
+            ownerThreadId: owner,
+            runtimeModeCeiling: "approval-required",
+            mcpCapabilityCeiling: ["workers", "pull-requests"],
+          },
+          createdAt: now,
+        });
+        yield* Deferred.await(stopEntered);
+        expect(calls).toEqual(["start:full-access", "send:full-access", "stop-entered"]);
+        yield* fixture.queueTurnResponseForNextSession({ events: [] });
+        yield* Deferred.succeed(releaseStop, undefined);
+        yield* Deferred.await(restrictedSent);
+        yield* Effect.promise(() => harness.drain());
+        const snapshot = yield* Effect.promise(() => harness.readModel());
+        const projected = snapshot.threads.find((entry) => entry.id === worker);
+        expect(projected?.session?.lastError).toBeNull();
+        expect(calls).toEqual([
+          "start:full-access",
+          "send:full-access",
+          "stop-entered",
+          "stop-acknowledged",
+          "start:approval-required",
+          "send:approval-required",
+        ]);
+        expect(projected?.runtimeMode).toBe("full-access");
+        expect(projected?.session?.runtimeMode).toBe("approval-required");
+        expect(projected?.worker?.runtimeModeCeiling).toBe("full-access");
+      }),
+  );
 
   effectIt.effect(
     "restarts when actual native runtime differs despite matching projected runtime",

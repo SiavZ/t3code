@@ -120,6 +120,34 @@ it.effect("builds MCP endpoints from the bound server host", () =>
   }),
 );
 
+it.effect("does not auto-grant pull requests or workers beyond an issuance ceiling", () =>
+  Effect.gen(function* () {
+    const registry = yield* makeRegistry(() => 1_000);
+    const issued = yield* registry.issue({
+      threadId: ThreadId.make("restricted-worker"),
+      providerInstanceId: ProviderInstanceId.make("codex"),
+      capabilities: new Set(["workers", "preview", "pull-requests"]),
+      capabilityCeiling: new Set(["preview"]),
+    });
+    const resolved = yield* registry.resolve(issued.config.authorizationHeader.slice(7));
+    expect([...resolved!.capabilities]).toEqual(["preview"]);
+    yield* registry.restrictThreadCapabilities(
+      issued.config.threadId,
+      new Set(["workers", "device"]),
+    );
+    expect([
+      ...(yield* registry.resolve(issued.config.authorizationHeader.slice(7)))!.capabilities,
+    ]).toEqual([]);
+    yield* registry.restrictThreadCapabilities(
+      issued.config.threadId,
+      new Set(["preview", "workers"]),
+    );
+    expect([
+      ...(yield* registry.resolve(issued.config.authorizationHeader.slice(7)))!.capabilities,
+    ]).toEqual([]);
+  }),
+);
+
 it.effect(
   "rechecks live settings and ancestor ceilings on every worker credential use without re-expanding a token",
   () =>

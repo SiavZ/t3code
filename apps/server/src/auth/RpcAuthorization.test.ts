@@ -1,4 +1,5 @@
 import {
+  AuthAccessWriteScope,
   AuthOrchestrationOperateScope,
   AuthOrchestrationReadScope,
   AuthRelayReadScope,
@@ -15,6 +16,10 @@ import {
 } from "./RpcAuthorization.ts";
 
 describe("RPC authorization scopes", () => {
+  it("requires administrative permission before granting unattended authority or configuring executable integrations", () => {
+    for (const method of [WS_METHODS.unattendedGrantCreate, WS_METHODS.unattendedGrantRevoke])
+      expect(requiredScopeForRpcMethod(method)).toBe(AuthAccessWriteScope);
+  });
   it("declares exactly one scope for every RPC in the server group", () => {
     expect(new Set(Object.keys(RPC_REQUIRED_SCOPES))).toEqual(new Set(WsRpcGroup.requests.keys()));
   });

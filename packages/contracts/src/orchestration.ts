@@ -140,6 +140,14 @@ export const WorkerMcpCapability = Schema.Literals([
   "workers",
 ]);
 export type WorkerMcpCapability = typeof WorkerMcpCapability.Type;
+export const ThreadUnattendedAuthority = Schema.Struct({
+  grantId: TrimmedNonEmptyString.check(Schema.isMaxLength(160)),
+  grantRevision: PositiveInt,
+  ownerThreadId: ThreadId,
+  runtimeModeCeiling: RuntimeMode,
+  mcpCapabilityCeiling: Schema.Array(WorkerMcpCapability).check(Schema.isMaxLength(32)),
+});
+export type ThreadUnattendedAuthority = typeof ThreadUnattendedAuthority.Type;
 
 /** Automatic approval and automatic edits are distinct policies, not ordered privilege levels. */
 export function isWorkerRuntimeModeAllowed(requested: RuntimeMode, ceiling: RuntimeMode): boolean {
@@ -1345,6 +1353,7 @@ const ThreadTurnStartBootstrap = Schema.Struct({
 export type ThreadTurnStartBootstrap = typeof ThreadTurnStartBootstrap.Type;
 
 export const ThreadTurnStartCommand = Schema.Struct({
+  unattendedAuthority: Schema.optional(ThreadUnattendedAuthority),
   type: Schema.Literal("thread.turn.start"),
   commandId: CommandId,
   threadId: ThreadId,
@@ -1387,6 +1396,8 @@ const ClientThreadTurnStartCommand = Schema.Struct({
 });
 
 const ThreadTurnInterruptCommand = Schema.Struct({
+  expectedMessageId: Schema.optional(MessageId),
+  expectedTurnId: Schema.optional(TurnId),
   type: Schema.Literal("thread.turn.interrupt"),
   commandId: CommandId,
   threadId: ThreadId,
@@ -1440,6 +1451,8 @@ const ThreadConversationRevertCommand = Schema.Struct({
 });
 
 const ThreadSessionStopCommand = Schema.Struct({
+  expectedMessageId: Schema.optional(MessageId),
+  expectedTurnId: Schema.optional(TurnId),
   type: Schema.Literal("thread.session.stop"),
   commandId: CommandId,
   threadId: ThreadId,
@@ -1520,6 +1533,8 @@ export const ClientOrchestrationCommand = Schema.Union([
 export type ClientOrchestrationCommand = typeof ClientOrchestrationCommand.Type;
 
 const ThreadSessionSetCommand = Schema.Struct({
+  expectedActivationSequence: Schema.optional(NonNegativeInt),
+  expectedMessageId: Schema.optional(MessageId),
   type: Schema.Literal("thread.session.set"),
   commandId: CommandId,
   threadId: ThreadId,
@@ -1687,6 +1702,8 @@ const ThreadPullRequestLinkSyncCommand = Schema.Struct({
 });
 
 const ThreadWorkerSpawnCommand = Schema.Struct({
+  unattendedAuthority: Schema.optional(ThreadUnattendedAuthority),
+  runtimeModeCeiling: Schema.optional(RuntimeMode),
   type: Schema.Literal("thread.worker.spawn"),
   commandId: CommandId,
   threadId: ThreadId,
@@ -1700,6 +1717,8 @@ const ThreadWorkerSpawnCommand = Schema.Struct({
 });
 
 const ThreadWorkerSendCommand = Schema.Struct({
+  runtimeModeCeiling: Schema.optional(RuntimeMode),
+  unattendedAuthority: Schema.optional(ThreadUnattendedAuthority),
   type: Schema.Literal("thread.worker.send"),
   commandId: CommandId,
   threadId: ThreadId,
@@ -1986,6 +2005,7 @@ export const ThreadMessageSentPayload = Schema.Struct({
 });
 
 export const ThreadTurnStartRequestedPayload = Schema.Struct({
+  unattendedAuthority: Schema.optional(ThreadUnattendedAuthority),
   threadId: ThreadId,
   messageId: MessageId,
   modelSelection: Schema.optional(ModelSelection),
@@ -2000,6 +2020,8 @@ export const ThreadTurnStartRequestedPayload = Schema.Struct({
 
 export const ThreadTurnInterruptRequestedPayload = Schema.Struct({
   threadId: ThreadId,
+  expectedMessageId: Schema.optional(MessageId),
+  expectedTurnId: Schema.optional(TurnId),
   turnId: Schema.optional(TurnId),
   createdAt: IsoDateTime,
 });
@@ -2033,6 +2055,8 @@ export const ThreadRevertedPayload = Schema.Struct({
 
 export const ThreadSessionStopRequestedPayload = Schema.Struct({
   threadId: ThreadId,
+  expectedMessageId: Schema.optional(MessageId),
+  expectedTurnId: Schema.optional(TurnId),
   createdAt: IsoDateTime,
 });
 

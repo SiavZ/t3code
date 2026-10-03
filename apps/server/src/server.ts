@@ -11,6 +11,7 @@ import * as Duration from "effect/Duration";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as SqlClient from "effect/unstable/sql/SqlClient";
 import * as Random from "effect/Random";
 import * as Schedule from "effect/Schedule";
 import * as Semaphore from "effect/Semaphore";
@@ -161,6 +162,7 @@ import * as UsageLimitSources from "./usage/UsageLimitSources.ts";
 import * as UsageService from "./usage/UsageService.ts";
 import { OrchestrationLayerLive } from "./orchestration/runtimeLayer.ts";
 import * as OwnedWorkers from "./orchestration/OwnedWorkers.ts";
+import * as UnattendedGrants from "./orchestration/UnattendedGrants.ts";
 import * as ProjectionSnapshotQuery from "./orchestration/Services/ProjectionSnapshotQuery.ts";
 import {
   clearPersistedServerRuntimeState,
@@ -470,6 +472,7 @@ const ProviderRuntimeLayerLive = ProviderSessionReaperLive.pipe(
   // Subscribes to `account.rate-limits.updated` so usage bars track live
   // telemetry instead of waiting for the next status probe.
   Layer.provideMerge(ProviderUsageLimitsIngestionLive),
+  Layer.provideMerge(UnattendedGrants.layer),
   Layer.provideMerge(OwnedWorkers.layer),
   Layer.provideMerge(ProviderLayerLive),
   Layer.provideMerge(WorkspaceLayerLive),
@@ -598,7 +601,9 @@ const McpSessionRegistryLive = Layer.unwrap(
   Effect.gen(function* () {
     const snapshots = yield* ProjectionSnapshotQuery.ProjectionSnapshotQuery;
     const settings = yield* ServerSettings.ServerSettingsService;
+    const sql = yield* SqlClient.SqlClient;
     return McpSessionRegistry.layer.pipe(
+      Layer.provide(Layer.succeed(SqlClient.SqlClient, sql)),
       Layer.provide(Layer.succeed(ProjectionSnapshotQuery.ProjectionSnapshotQuery, snapshots)),
       Layer.provide(Layer.succeed(ServerSettings.ServerSettingsService, settings)),
     );

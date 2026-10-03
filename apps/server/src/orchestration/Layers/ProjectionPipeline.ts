@@ -1406,12 +1406,36 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
     const applyThreadTurnsProjection: ProjectorDefinition["apply"] = Effect.fn(
       "applyThreadTurnsProjection",
     )(function* (event, _attachmentSideEffects) {
+      if (
+        (event.type === "thread.turn-interrupt-requested" ||
+          event.type === "thread.session-stop-requested") &&
+        event.payload.expectedMessageId !== undefined
+      ) {
+        yield* sql`INSERT INTO projection_turn_cancellations (thread_id, message_id, event_sequence, expected_turn_id)
+          VALUES (${event.payload.threadId}, ${event.payload.expectedMessageId}, ${event.sequence}, ${event.payload.expectedTurnId ?? null})
+          ON CONFLICT(thread_id, message_id) DO UPDATE SET event_sequence = excluded.event_sequence,
+            expected_turn_id = excluded.expected_turn_id`.pipe(
+          Effect.mapError(toPersistenceSqlError("ProjectionPipeline.cancelTurn")),
+        );
+        const pending = yield* projectionTurnRepository.getPendingTurnStartByThreadId({
+          threadId: event.payload.threadId,
+        });
+        if (Option.isSome(pending) && pending.value.messageId === event.payload.expectedMessageId) {
+          yield* projectionTurnRepository.deletePendingTurnStartByThreadId({
+            threadId: event.payload.threadId,
+          });
+        }
+      }
       switch (event.type) {
         case "thread.session-stop-requested": {
           const thread = yield* projectionThreadRepository.getById({
             threadId: event.payload.threadId,
           });
-          if (Option.isSome(thread) && thread.value.worker) {
+          if (
+            Option.isSome(thread) &&
+            thread.value.worker &&
+            event.payload.expectedMessageId === undefined
+          ) {
             yield* projectionTurnRepository.deletePendingTurnStartByThreadId({
               threadId: event.payload.threadId,
             });
@@ -1424,7 +1448,19 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
           });
           return;
 
+        case "thread.deleted":
+          yield* sql`DELETE FROM projection_thread_activation_authorities WHERE thread_id = ${event.payload.threadId}`.pipe(
+            Effect.mapError(toPersistenceSqlError("ProjectionPipeline.activationAuthority")),
+          );
+          return;
+
         case "thread.turn-start-requested": {
+          yield* sql`INSERT INTO projection_thread_activation_authorities (thread_id, message_id, event_sequence, authority_json)
+            VALUES (${event.payload.threadId}, ${event.payload.messageId}, ${event.sequence}, ${event.payload.unattendedAuthority === undefined ? null : JSON.stringify(event.payload.unattendedAuthority)})
+            ON CONFLICT(thread_id) DO UPDATE SET message_id = excluded.message_id, event_sequence = excluded.event_sequence,
+              authority_json = excluded.authority_json`.pipe(
+            Effect.mapError(toPersistenceSqlError("ProjectionPipeline.activationAuthority")),
+          );
           const pendingTurnStart = yield* projectionTurnRepository.getPendingTurnStartByThreadId({
             threadId: event.payload.threadId,
           });

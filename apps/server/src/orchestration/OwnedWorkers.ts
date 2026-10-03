@@ -1,4 +1,6 @@
 import {
+  type ThreadUnattendedAuthority,
+  isWorkerRuntimeModeAllowed,
   ThreadId,
   WorkerOperationError,
   WorkerSpawnInput,
@@ -36,6 +38,7 @@ import * as OrchestrationEngine from "./Services/OrchestrationEngine.ts";
 import * as ProjectionSnapshotQuery from "./Services/ProjectionSnapshotQuery.ts";
 
 export interface WorkerSpawnAuthority {
+  readonly unattendedAuthority?: ThreadUnattendedAuthority;
   readonly mcpCapabilityCeiling?: ReadonlyArray<
     NonNullable<OrchestrationThreadShell["worker"]>["mcpCapabilityCeiling"][number]
   >;
@@ -54,6 +57,7 @@ export class OwnedWorkers extends Context.Service<
     readonly get: (input: WorkerGetInput) => Effect.Effect<WorkerGetResult, WorkerOperationError>;
     readonly send: (
       input: WorkerSendInput,
+      authority?: WorkerSpawnAuthority,
     ) => Effect.Effect<WorkerOperationResult, WorkerOperationError>;
     readonly stop: (
       input: WorkerStopInput,
@@ -263,7 +267,21 @@ const make = Effect.gen(function* () {
         "Start the scratch owner thread before spawning a worker.",
       );
     }
+    const inherited = yield* wrap(
+      "spawn",
+      snapshots.getThreadActivationAuthority(input.callerThreadId),
+    );
+    const unattendedAuthority = authority?.unattendedAuthority ?? Option.getOrUndefined(inherited);
+    const runtimeModeCeiling = unattendedAuthority
+      ? isWorkerRuntimeModeAllowed(caller.runtimeMode, unattendedAuthority.runtimeModeCeiling)
+        ? caller.runtimeMode
+        : unattendedAuthority.runtimeModeCeiling
+      : undefined;
     let mcpCapabilityCeiling = [...((yield* threadCapabilities(input.callerThreadId)) ?? [])];
+    if (unattendedAuthority)
+      mcpCapabilityCeiling = mcpCapabilityCeiling.filter((capability) =>
+        unattendedAuthority.mcpCapabilityCeiling.includes(capability),
+      );
     if (authority?.mcpCapabilityCeiling)
       mcpCapabilityCeiling = mcpCapabilityCeiling.filter((capability) =>
         authority.mcpCapabilityCeiling!.includes(capability),
@@ -288,6 +306,8 @@ const make = Effect.gen(function* () {
       input.modelSelection.instanceId,
       input.modelSelection.model,
       options,
+      ...(runtimeModeCeiling === undefined ? [] : [runtimeModeCeiling]),
+      ...(unattendedAuthority === undefined ? [] : [unattendedAuthority]),
     ]);
     const receipt = yield* wrap(
       "spawn",
@@ -297,6 +317,8 @@ const make = Effect.gen(function* () {
         threadId,
         mcpCapabilityCeiling,
         spawnFingerprint,
+        ...(runtimeModeCeiling === undefined ? {} : { runtimeModeCeiling }),
+        ...(unattendedAuthority === undefined ? {} : { unattendedAuthority }),
         createdAt: DateTime.formatIso(yield* DateTime.now),
       }),
     );
@@ -346,15 +368,33 @@ const make = Effect.gen(function* () {
     if (Option.isNone(detail)) return yield* failure("get", "not-found", "Worker not found.");
     return { worker: summarize(state), detail: detail.value };
   });
-  const send = Effect.fn("OwnedWorkers.send")(function* (rawInput: WorkerSendInput) {
+  const send = Effect.fn("OwnedWorkers.send")(function* (
+    rawInput: WorkerSendInput,
+    authority?: WorkerSpawnAuthority,
+  ) {
     const input = yield* decodeSendInput(rawInput).pipe(
       Effect.mapError(() => failure("send", "invalid-input", "Invalid worker send input.")),
     );
-    yield* target("send", input.callerThreadId, input.workerThreadId);
+    const targetState = yield* target("send", input.callerThreadId, input.workerThreadId);
+    const callerAuthority = yield* wrap(
+      "send",
+      snapshots.getThreadActivationAuthority(input.callerThreadId),
+    );
+    const unattendedAuthority =
+      authority?.unattendedAuthority ?? Option.getOrUndefined(callerAuthority);
+    const runtimeModeCeiling =
+      unattendedAuthority &&
+      !isWorkerRuntimeModeAllowed(
+        targetState.thread.runtimeMode,
+        unattendedAuthority.runtimeModeCeiling,
+      )
+        ? unattendedAuthority.runtimeModeCeiling
+        : targetState.thread.runtimeMode;
     const receipt = yield* wrap(
       "send",
       engine.dispatch({
         type: "thread.worker.send",
+        ...(unattendedAuthority ? { unattendedAuthority, runtimeModeCeiling } : {}),
         commandId: input.commandId,
         callerThreadId: input.callerThreadId,
         threadId: input.workerThreadId,

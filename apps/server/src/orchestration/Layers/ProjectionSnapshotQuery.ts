@@ -1,3 +1,4 @@
+import { ThreadUnattendedAuthority } from "@t3tools/contracts";
 import {
   AgentSessionImportSource,
   ApprovalRequestId,
@@ -3445,6 +3446,25 @@ pending_approval_requests AS (
     `,
   });
 
+  const getThreadActivationAuthority: ProjectionSnapshotQueryShape["getThreadActivationAuthority"] =
+    (threadId) =>
+      Effect.gen(function* () {
+        const rows = yield* sql<{
+          authority_json: string | null;
+        }>`SELECT authority_json FROM projection_thread_activation_authorities WHERE thread_id = ${threadId}`.pipe(
+          Effect.mapError(toPersistenceSqlError("ProjectionSnapshotQuery.activationAuthority")),
+        );
+        if (!rows[0]?.authority_json) return Option.none();
+        return Option.some(
+          yield* Schema.decodeUnknownEffect(Schema.fromJsonString(ThreadUnattendedAuthority))(
+            rows[0].authority_json,
+          ).pipe(
+            Effect.mapError(
+              toPersistenceDecodeError("ProjectionSnapshotQuery.activationAuthority"),
+            ),
+          ),
+        );
+      });
   const getWorkerState: ProjectionSnapshotQueryShape["getWorkerState"] = (threadId) =>
     Effect.gen(function* () {
       const thread = yield* readThreadShell(threadId, true);
@@ -4079,6 +4099,7 @@ pending_approval_requests AS (
 
   return {
     getWorkerSpawnMetadata,
+    getThreadActivationAuthority,
     getWorkerAdmissionStates,
     getCommandReadModel,
     getWorkerState,
