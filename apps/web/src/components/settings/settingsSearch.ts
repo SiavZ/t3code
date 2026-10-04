@@ -608,6 +608,13 @@ export const SETTINGS_SEARCH_ITEMS = [
     searchTerms: ["allow disable enable open drive preview tools sessions project override"],
   },
   {
+    id: "agent-memory-access",
+    title: "Agent memory",
+    to: "/settings/integrations",
+    scope: "project-defaults",
+    searchTerms: ["remember recall forget notes knowledge stored delete project override"],
+  },
+  {
     id: "device-hosts",
     title: "Device hosts",
     to: "/settings/integrations",

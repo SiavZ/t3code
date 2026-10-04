@@ -345,6 +345,7 @@ describe("searchSettings", () => {
     ["default model", "default-model", "/settings/general"],
     ["new threads", "new-threads", "/settings/general"],
     ["agent browser access", "agent-browser-access", "/settings/integrations"],
+    ["agent memory", "agent-memory-access", "/settings/integrations"],
     ["automatically pull", "automatic-pull", "/settings/source-control"],
     ["actions", "project-actions", "/settings/projects"],
     ["project overview", "project-overview", "/settings/projects"],

@@ -55,7 +55,11 @@ const PAGE_PROJECT_KEYS: Record<SettingsPage, readonly ProjectScopedServerSettin
     "branchNamePrefix",
     "branchNameInstructions",
   ],
-  "agent-behavior": ["responseStreamingMode", "enableAgentBrowserAccess"],
+  "agent-behavior": [
+    "responseStreamingMode",
+    "enableAgentBrowserAccess",
+    "enableAgentMemoryAccess",
+  ],
   maintenance: ["continueThreadsAfterServerUpdate"],
 };
 
@@ -387,6 +391,16 @@ function ServerSettingsDetail(props: { readonly page: SettingsPage }) {
                       value={uniform("enableAgentBrowserAccess")}
                       disabled={disabledFor("enableAgentBrowserAccess")}
                       onValueChange={(value) => write({ enableAgentBrowserAccess: value })}
+                    />
+                  </SettingsSection>
+                  <SettingsSection title="Memory">
+                    <SettingsSwitchRow
+                      icon="brain"
+                      label="Agent memory"
+                      subtitle="Let agents remember and recall project notes across threads."
+                      value={uniform("enableAgentMemoryAccess")}
+                      disabled={disabledFor("enableAgentMemoryAccess")}
+                      onValueChange={(value) => write({ enableAgentMemoryAccess: value })}
                     />
                   </SettingsSection>
                 </>

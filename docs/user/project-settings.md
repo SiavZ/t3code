@@ -87,6 +87,19 @@ itself, or **Skip** to leave them for a setup script. It resolves in the same or
 workspace default: a `"worktreeSubmodules"` value in the `t3.json` of the branch being checked out
 applies when the project and environment are both on **Inherit**.
 
+## Agent memory
+
+Agent memory gives every provider in a project a shared notebook that lasts across threads.
+Agents save notes such as how to run the tests or a decision you made, and recall them in later
+threads, even when those threads use a different provider. It is off by default. Turn on
+**Agent memory** in **Settings → Integrations**, either for the environment or, with a project
+selected, for that project only. The change applies when an agent session next starts.
+
+Memory belongs to one project on one environment. Other projects never see it, and it does not
+sync between machines. With a project selected, **Stored memory** lists what agents saved, and
+you can delete any entry. Turning memory off hides the tools from agents but keeps the stored
+notes until you delete them.
+
 ## Storage cleanup
 
 Open **Settings → Storage** to enable automatic cleanup on one machine or all connected

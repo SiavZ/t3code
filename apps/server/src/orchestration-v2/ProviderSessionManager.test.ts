@@ -510,6 +510,8 @@ function runBrowserAccessScenario(input: {
   readonly enableAgentBrowserAccess: boolean;
   readonly projectOverride: boolean;
   readonly deviceOverride?: boolean;
+  readonly enableAgentMemoryAccess?: boolean;
+  readonly memoryOverride?: boolean;
   readonly createThread?: boolean;
   readonly projectExists?: boolean;
 }) {
@@ -555,12 +557,18 @@ function runBrowserAccessScenario(input: {
           projectServiceLayer,
           serverSettingsLayer: ServerSettings.layerTest({
             enableAgentBrowserAccess: input.enableAgentBrowserAccess,
+            ...(input.enableAgentMemoryAccess === undefined
+              ? {}
+              : { enableAgentMemoryAccess: input.enableAgentMemoryAccess }),
             projectSettingsOverrides: {
               [projectId]: {
                 enableAgentBrowserAccess: input.projectOverride,
                 ...(input.deviceOverride === undefined
                   ? {}
                   : { enableAgentDeviceAccess: input.deviceOverride }),
+                ...(input.memoryOverride === undefined
+                  ? {}
+                  : { enableAgentMemoryAccess: input.memoryOverride }),
               },
             },
           }),
@@ -3476,5 +3484,48 @@ it.effect(
         projectExists: false,
       });
       assert.isFalse(denied?.capabilities?.has("device"));
+    }),
+);
+
+it.effect(
+  "ProviderSessionManagerV2 grants memory only when the environment or project turns it on",
+  () =>
+    Effect.gen(function* () {
+      const defaults = yield* runBrowserAccessScenario({
+        enableAgentBrowserAccess: true,
+        projectOverride: true,
+      });
+      assert.isFalse(defaults?.capabilities?.has("memory"));
+
+      const environment = yield* runBrowserAccessScenario({
+        enableAgentBrowserAccess: true,
+        projectOverride: true,
+        enableAgentMemoryAccess: true,
+      });
+      assert.isTrue(environment?.capabilities?.has("memory"));
+
+      const projectOff = yield* runBrowserAccessScenario({
+        enableAgentBrowserAccess: true,
+        projectOverride: true,
+        enableAgentMemoryAccess: true,
+        memoryOverride: false,
+      });
+      assert.isFalse(projectOff?.capabilities?.has("memory"));
+
+      const projectOn = yield* runBrowserAccessScenario({
+        enableAgentBrowserAccess: true,
+        projectOverride: true,
+        memoryOverride: true,
+      });
+      assert.isTrue(projectOn?.capabilities?.has("memory"));
+
+      // An override for a project that cannot be read fails closed.
+      const unreadable = yield* runBrowserAccessScenario({
+        enableAgentBrowserAccess: true,
+        projectOverride: true,
+        memoryOverride: true,
+        projectExists: false,
+      });
+      assert.isFalse(unreadable?.capabilities?.has("memory"));
     }),
 );

@@ -26,6 +26,7 @@ import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../
 import { toastManager } from "../ui/toast";
 import { Switch } from "../ui/switch";
 import type { ProjectSettingsCategory } from "./ProjectSettingsPanel";
+import { ProjectMemorySettings } from "./ProjectMemorySettings";
 import { searchableSetting } from "./settingsSearch";
 import { useSettingsScope } from "./SettingsScopeContext";
 import {
@@ -78,6 +79,7 @@ export function ProjectDefaultsSettings({ category }: { category: ProjectSetting
   const mixedWorkspace = useScopedSettingsMixed(["defaultThreadEnvMode"]);
   const mixedSubmodules = useScopedSettingsMixed(["worktreeSubmodules"]);
   const mixedBrowser = useScopedSettingsMixed(["enableAgentBrowserAccess"]);
+  const mixedMemory = useScopedSettingsMixed(["enableAgentMemoryAccess"]);
   const mixedAutoPull = useScopedSettingsMixed(["defaultAutoPull"]);
   const mixedMergeMethod = useScopedSettingsMixed(["pullRequestMergeMethod"]);
   const modelSource = useScopedSettingSource(["defaultModelSelection"]);
@@ -260,7 +262,7 @@ export function ProjectDefaultsSettings({ category }: { category: ProjectSetting
         category === "general" || category === "project"
           ? "New threads"
           : category === "integrations"
-            ? "Browser"
+            ? "Agent access"
             : "Repositories"
       }
     >
@@ -496,6 +498,46 @@ export function ProjectDefaultsSettings({ category }: { category: ProjectSetting
               />
             }
           />
+          <SettingsRow
+            serverScoped
+            settingKeys={["enableAgentMemoryAccess"]}
+            mixed={mixedMemory}
+            id={searchableSetting("agent-memory-access").id}
+            title="Agent memory"
+            description={
+              isProjectScope
+                ? "Let agents in this project remember and recall notes across threads and providers. Applies when the agent session next starts."
+                : "Let agents remember and recall project notes across threads and providers. Projects can override it."
+            }
+            resetAction={
+              settings.enableAgentMemoryAccess !==
+              DEFAULT_SERVER_SETTINGS.enableAgentMemoryAccess ? (
+                <SettingResetButton
+                  label="default agent memory"
+                  onClick={() =>
+                    updateSettings({
+                      enableAgentMemoryAccess: DEFAULT_SERVER_SETTINGS.enableAgentMemoryAccess,
+                    })
+                  }
+                />
+              ) : null
+            }
+            control={
+              <Switch
+                aria-label="Agent memory"
+                mixed={mixedMemory}
+                checked={mixedMemory ? false : settings.enableAgentMemoryAccess}
+                onCheckedChange={(enabled) => updateSettings({ enableAgentMemoryAccess: enabled })}
+              />
+            }
+          />
+          {/* Memory lives on each environment, so the list needs one project on one environment. */}
+          {isProjectScope && targets.length === 1 && targets[0]?.projectId ? (
+            <ProjectMemorySettings
+              environmentId={targets[0].environmentId}
+              projectId={targets[0].projectId}
+            />
+          ) : null}
         </>
       )}
     </SettingsSection>

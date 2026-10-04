@@ -60,6 +60,11 @@ describe("RPC authorization scopes", () => {
     );
   });
 
+  it("lets read-only clients review project memory but not delete it", () => {
+    expect(requiredScopeForRpcMethod(WS_METHODS.memoryList)).toBe(AuthOrchestrationReadScope);
+    expect(requiredScopeForRpcMethod(WS_METHODS.memoryDelete)).toBe(AuthOrchestrationOperateScope);
+  });
+
   it("separates ACP Registry discovery from provisioning", () => {
     expect(requiredScopeForRpcMethod(WS_METHODS.serverSearchAcpRegistry)).toBe(
       AuthOrchestrationReadScope,
