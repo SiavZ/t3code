@@ -119,6 +119,7 @@ import * as ThreadLaunchService from "./orchestration-v2/ThreadLaunchService.ts"
 import * as ThreadMessageIntake from "./orchestration-v2/ThreadMessageIntake.ts";
 import * as IdAllocator from "./orchestration-v2/IdAllocator.ts";
 import * as ScheduledTasks from "./scheduledTasks/ScheduledTaskService.ts";
+import * as MemoryService from "./memory/MemoryService.ts";
 import {
   archivedShellStreamItemFromThreadShell,
   buildActiveShellSnapshot,
@@ -1216,6 +1217,7 @@ const makeWsRpcLayer = (
       const threadLaunch = yield* ThreadLaunchService.ThreadLaunchService;
       const providerSessionManager = yield* ProviderSessionManager.ProviderSessionManagerV2;
       const scheduledTasks = yield* ScheduledTasks.ScheduledTaskService;
+      const memory = yield* MemoryService.MemoryService;
       const pullRequests = yield* PullRequestService.PullRequestService;
       const pullRequestSync = yield* PullRequestSyncReactor.PullRequestSyncReactor;
       const deviceService = yield* DeviceService.DeviceService;
@@ -2057,6 +2059,19 @@ const makeWsRpcLayer = (
           observeRpcEffect(WS_METHODS.scheduledTasksList, scheduledTasks.list(), {
             "rpc.aggregate": "scheduledTasks",
           }),
+        [WS_METHODS.memoryList]: (input) =>
+          observeRpcEffect(WS_METHODS.memoryList, memory.list({ projectId: input.projectId }), {
+            "rpc.aggregate": "memory",
+            "project.id": input.projectId,
+          }),
+        [WS_METHODS.memoryDelete]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.memoryDelete,
+            memory
+              .forget({ id: input.id }, { projectId: input.projectId })
+              .pipe(Effect.map((deleted) => ({ deleted }))),
+            { "rpc.aggregate": "memory", "project.id": input.projectId },
+          ),
         [WS_METHODS.scheduledTasksSubscribe]: (_input) =>
           observeRpcStream(WS_METHODS.scheduledTasksSubscribe, scheduledTasks.subscribeList(), {
             "rpc.aggregate": "scheduledTasks",
@@ -3786,6 +3801,7 @@ export const websocketRpcRouteLayer = Layer.unwrap(
     const previewAutomationBroker = yield* PreviewAutomationBroker.PreviewAutomationBroker;
     const serverSelfUpdate = yield* ServerSelfUpdate.ServerSelfUpdate;
     const pullRequests = yield* PullRequestService.PullRequestService;
+    const memory = yield* MemoryService.MemoryService;
     const sql = yield* SqlClient.SqlClient;
     return HttpRouter.add(
       "GET",
@@ -3846,6 +3862,7 @@ export const websocketRpcRouteLayer = Layer.unwrap(
               // One server-lifetime service means clients share the same PR caches, and a WS
               // mutation invalidates the HTTP diff cache that every client reads from.
               Layer.provide(Layer.succeed(PullRequestService.PullRequestService, pullRequests)),
+              Layer.provide(Layer.succeed(MemoryService.MemoryService, memory)),
               Layer.provide(
                 SourceControlDiscovery.layer.pipe(
                   Layer.provide(

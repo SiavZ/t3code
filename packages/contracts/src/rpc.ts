@@ -316,6 +316,13 @@ import {
   ScheduledTaskMutationResult,
 } from "./scheduledTask.ts";
 import {
+  MemoryDeleteInput,
+  MemoryDeleteResult,
+  MemoryListInput,
+  MemoryListResult,
+  MemoryStorageError,
+} from "./memory.ts";
+import {
   ProjectCloneActionInput,
   ProjectCloneActionResult,
   ProjectCloneListEvent,
@@ -474,6 +481,8 @@ export const WS_METHODS = {
   scheduledTasksSetEnabled: "scheduledTasks.setEnabled",
   scheduledTasksDelete: "scheduledTasks.delete",
   scheduledTasksRunNow: "scheduledTasks.runNow",
+  memoryList: "memory.list",
+  memoryDelete: "memory.delete",
 
   // Cloud environment methods
   cloudGetRelayClientStatus: "cloud.getRelayClientStatus",
@@ -1668,6 +1677,19 @@ const WsScheduledTasksRunNowRpc = Rpc.make(WS_METHODS.scheduledTasksRunNow, {
   error: Schema.Union([ScheduledTaskError, EnvironmentAuthorizationError]),
 });
 
+/** What agents remembered in one project, newest first, for the user to review. */
+const WsMemoryListRpc = Rpc.make(WS_METHODS.memoryList, {
+  payload: MemoryListInput,
+  success: MemoryListResult,
+  error: Schema.Union([MemoryStorageError, EnvironmentAuthorizationError]),
+});
+
+const WsMemoryDeleteRpc = Rpc.make(WS_METHODS.memoryDelete, {
+  payload: MemoryDeleteInput,
+  success: MemoryDeleteResult,
+  error: Schema.Union([MemoryStorageError, EnvironmentAuthorizationError]),
+});
+
 const WsSubscribeAuthAccessRpc = Rpc.make(WS_METHODS.subscribeAuthAccess, {
   payload: Schema.Struct({}),
   success: AuthAccessStreamEvent,
@@ -1753,6 +1775,8 @@ export const WsRpcGroup = RpcGroup.make(
   WsScheduledTasksSetEnabledRpc,
   WsScheduledTasksDeleteRpc,
   WsScheduledTasksRunNowRpc,
+  WsMemoryListRpc,
+  WsMemoryDeleteRpc,
   WsServerReportClientActivityRpc,
   WsServerReportHostPowerStateRpc,
   WsServerGetBackgroundPolicyRpc,

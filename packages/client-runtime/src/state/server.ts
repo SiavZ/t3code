@@ -1285,6 +1285,14 @@ export function createServerEnvironmentAtoms<R, E>(
       label: "environment-data:server:scheduled-task:run-now",
       tag: WS_METHODS.scheduledTasksRunNow,
     }),
+    listMemory: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:server:memory:list",
+      tag: WS_METHODS.memoryList,
+    }),
+    deleteMemory: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:server:memory:delete",
+      tag: WS_METHODS.memoryDelete,
+    }),
     refreshUsageRates: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:server:refresh-usage-rates",
       tag: WS_METHODS.serverRefreshUsageRates,
