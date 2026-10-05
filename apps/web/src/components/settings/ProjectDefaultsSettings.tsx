@@ -534,6 +534,9 @@ export function ProjectDefaultsSettings({ category }: { category: ProjectSetting
           {/* Memory lives on each environment, so the list needs one project on one environment. */}
           {isProjectScope && targets.length === 1 && targets[0]?.projectId ? (
             <ProjectMemorySettings
+              // A project group can move to another connected environment while settings stays
+              // open. Remounting drops the old list and ignores a load still in flight for it.
+              key={`${targets[0].environmentId}:${targets[0].projectId}`}
               environmentId={targets[0].environmentId}
               projectId={targets[0].projectId}
             />
