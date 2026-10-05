@@ -77,3 +77,57 @@ test("can retry after startup failure, and stops only the child it started", asy
   assert.deepEqual(stopped, [current]);
   assert.equal(launcher.status, "stopped");
 });
+
+test("fails fast and stops its runner when another server already holds the dev state", async () => {
+  const child = processFixture();
+  const stopped = [];
+  const launcher = new SourceLauncher(root, {
+    spawnProcess: () => child,
+    stopProcess: (target) => stopped.push(target),
+  });
+  const start = launcher.start();
+  // The real dev runner prints this and then stays alive, waiting for file changes.
+  child.stderr.emit(
+    "data",
+    "  A T3 Code server is already running for /repo/.t3/vscode-dev (pid 4242, http://127.0.0.1:13773). Connect to that server, stop it before starting another, or use a different --base-dir.\n",
+  );
+  await assert.rejects(
+    start,
+    /already using this checkout's dev state \(pid 4242, http:\/\/127\.0\.0\.1:13773\)/,
+  );
+  assert.equal(launcher.status, "stopped");
+  assert.deepEqual(stopped, [child]);
+  // A later pairing line from the abandoned runner cannot flip the state back to ready.
+  child.stdout.emit("data", `pairingUrl: ${tokenUrl}\n`);
+  assert.equal(launcher.status, "stopped");
+});
+
+test("fails fast when the server process crashes but the dev runner keeps watching", async () => {
+  const child = processFixture();
+  const stopped = [];
+  const launcher = new SourceLauncher(root, {
+    spawnProcess: () => child,
+    stopProcess: (target) => stopped.push(target),
+  });
+  const start = launcher.start();
+  child.stdout.emit(
+    "data",
+    "Failed running 'src/bin.ts'. Waiting for file changes before restarting...\n",
+  );
+  await assert.rejects(start, /server failed to start/);
+  assert.equal(launcher.status, "stopped");
+  assert.deepEqual(stopped, [child]);
+});
+
+test("gives up after the startup timeout instead of staying on Starting forever", async () => {
+  const child = processFixture();
+  const stopped = [];
+  const launcher = new SourceLauncher(root, {
+    spawnProcess: () => child,
+    stopProcess: (target) => stopped.push(target),
+    startupTimeoutMs: 20,
+  });
+  await assert.rejects(launcher.start(), /did not start within/);
+  assert.equal(launcher.status, "stopped");
+  assert.deepEqual(stopped, [child]);
+});

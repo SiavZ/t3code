@@ -13,6 +13,32 @@ function pairingUrlFromLine(line) {
   return url.protocol === "http:" ? url : undefined;
 }
 
+// The dev runner stays alive when its server process fails (node --watch waits for file changes),
+// so a failed start never exits. These lines mean the server gave up; surface them instead of
+// waiting for a pairing URL that will never come.
+const STARTUP_FAILURES = [
+  {
+    pattern: /A T3 Code server is already running for .+? \(pid (\d+), (https?:\/\/[^)\s]+)\)/,
+    message: (match) =>
+      `Another T3 Code server is already using this checkout's dev state (pid ${match[1]}, ${match[2]}). Stop it, then open T3 Code again.`,
+  },
+  {
+    pattern: /Failed running '.+?'\. Waiting for file changes before restarting/,
+    message: () =>
+      "The T3 Code server failed to start. Run `node scripts/dev-runner.ts dev` in the checkout to see why.",
+  },
+];
+
+function startupFailureFromLine(line) {
+  for (const failure of STARTUP_FAILURES) {
+    const match = line.match(failure.pattern);
+    if (match) return failure.message(match);
+  }
+  return undefined;
+}
+
+const STARTUP_TIMEOUT_MS = 5 * 60 * 1000;
+
 function stopChild(child) {
   if (!child.pid) return;
   if (platform() === "win32") {
@@ -39,6 +65,7 @@ class SourceLauncher {
     this.spawnProcess = options.spawnProcess || spawn;
     this.stopProcess = options.stopProcess || stopChild;
     this.onState = options.onState || (() => {});
+    this.startupTimeoutMs = options.startupTimeoutMs ?? STARTUP_TIMEOUT_MS;
     this.child = undefined;
     this.starting = undefined;
     this.url = undefined;
@@ -74,6 +101,29 @@ class SourceLauncher {
     this.setStatus("starting");
     const starting = new Promise((resolve, reject) => {
       let settled = false;
+      // A start that never reports a pairing URL or a known failure still ends: stop the runner
+      // we spawned rather than leaving the view on "Starting…" with an orphaned process group.
+      const timer = setTimeout(() => {
+        if (settled || this.child !== child) return;
+        fail(
+          new Error(
+            `T3 Code did not start within ${Math.round(this.startupTimeoutMs / 1000)} seconds. Run \`node scripts/dev-runner.ts dev\` in the checkout to see why.`,
+          ),
+        );
+      }, this.startupTimeoutMs);
+      timer.unref?.();
+      const fail = (error) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        if (this.child === child) {
+          this.child = undefined;
+          this.url = undefined;
+          this.setStatus("stopped");
+          this.stopProcess(child);
+        }
+        reject(error);
+      };
       const consume = (stream) => {
         let pending = "";
         stream.on("data", (chunk) => {
@@ -81,9 +131,16 @@ class SourceLauncher {
           const lines = pending.split(/\r?\n/);
           pending = lines.pop().slice(-4096);
           for (const line of lines) {
+            if (settled || this.child !== child) continue;
+            const failure = startupFailureFromLine(line);
+            if (failure) {
+              fail(new Error(failure));
+              continue;
+            }
             const url = pairingUrlFromLine(line);
-            if (!url || settled || this.child !== child) continue;
+            if (!url) continue;
             settled = true;
+            clearTimeout(timer);
             this.url = url;
             this.setStatus("ready");
             resolve(url);
@@ -93,6 +150,7 @@ class SourceLauncher {
       consume(child.stdout);
       consume(child.stderr);
       child.once("error", (error) => {
+        clearTimeout(timer);
         if (this.child === child) {
           this.child = undefined;
           this.url = undefined;
@@ -104,6 +162,7 @@ class SourceLauncher {
         }
       });
       child.once("exit", (code) => {
+        clearTimeout(timer);
         if (this.child === child) {
           this.child = undefined;
           this.url = undefined;
@@ -136,4 +195,4 @@ class SourceLauncher {
   }
 }
 
-module.exports = { SourceLauncher, pairingUrlFromLine, stopChild };
+module.exports = { SourceLauncher, pairingUrlFromLine, startupFailureFromLine, stopChild };
