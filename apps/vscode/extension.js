@@ -8,7 +8,10 @@ let launcher;
 function isSourceRoot(root) {
   if (!fs.existsSync(path.join(root, "scripts", "dev-runner.ts"))) return false;
   try {
-    return JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf8")).name === "@t3tools/monorepo";
+    return (
+      JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf8")).name ===
+      "@t3tools/monorepo"
+    );
   } catch {
     return false;
   }
@@ -31,7 +34,9 @@ async function sourceRoot(context, choose = false) {
   const root = selection?.[0]?.fsPath;
   if (!root) return undefined;
   if (!isSourceRoot(root)) {
-    vscode.window.showErrorMessage("Select the T3 Code source checkout, containing package.json and scripts/dev-runner.ts.");
+    vscode.window.showErrorMessage(
+      "Select the T3 Code source checkout, containing package.json and scripts/dev-runner.ts.",
+    );
     return undefined;
   }
   await context.globalState.update("checkoutPath", root);
