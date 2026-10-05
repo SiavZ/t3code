@@ -71,8 +71,30 @@ const ProjectRequest = Schema.Struct({ projectId: Schema.String });
 const make = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
   const crypto = yield* Crypto.Crypto;
-
   const storageError = (cause: unknown) => new MemoryStorageError({ cause });
+
+  // Fork build: the table is created here, not by a numbered migration. Upstream owns the migration
+  // id sequence, and a fork-only id recorded in a user's database would make later upstream
+  // migrations with the same id skip silently. Agent-written entries are immutable; there is no
+  // foreign key to projects, so a removed project's notes are simply never listed again.
+  yield* sql`
+      CREATE TABLE IF NOT EXISTS agent_memory_entries (
+        id TEXT PRIMARY KEY,
+        project_id TEXT NOT NULL,
+        category TEXT NOT NULL,
+        content TEXT NOT NULL,
+        source_thread_id TEXT,
+        created_at TEXT NOT NULL
+      )
+    `.pipe(
+    Effect.andThen(
+      sql`
+      CREATE INDEX IF NOT EXISTS idx_agent_memory_entries_project_created
+      ON agent_memory_entries(project_id, created_at DESC, id)
+    `,
+    ),
+    Effect.mapError(storageError),
+  );
 
   // Every query reads the whole project, which the per-project cap keeps small.
   const projectRows = SqlSchema.findAll({

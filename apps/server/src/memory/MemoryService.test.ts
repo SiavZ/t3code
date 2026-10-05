@@ -6,8 +6,10 @@ import {
   ProjectId,
   ThreadId,
 } from "@t3tools/contracts";
+import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as SqlClient from "effect/unstable/sql/SqlClient";
 
 import { SqlitePersistenceMemory } from "../persistence/Layers/Sqlite.ts";
 import * as MemoryService from "./MemoryService.ts";
@@ -23,6 +25,34 @@ const layer = it.layer(
 );
 
 layer("MemoryService", (it) => {
+  it.effect("creates its own table outside the migration ledger, and restarts cleanly", () =>
+    Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      const tables = yield* sql<{ readonly name: string }>`
+        SELECT name FROM sqlite_master WHERE name = 'agent_memory_entries'
+      `;
+      assert.strictEqual(tables.length, 1);
+      const ledger = yield* sql<{ readonly name: string }>`
+        SELECT name FROM effect_sql_migrations WHERE name LIKE '%Memory%'
+      `;
+      assert.deepEqual(ledger, []);
+      // A second service start against the same database keeps existing entries.
+      const project = { projectId: ProjectId.make("project-restart") };
+      yield* MemoryService.MemoryService.pipe(
+        Effect.flatMap((memory) =>
+          memory.remember({ category: "fact", content: "survives restart" }, project),
+        ),
+      );
+      const restarted = yield* Layer.build(MemoryService.layer).pipe(
+        Effect.map((context) => Context.get(context, MemoryService.MemoryService)),
+      );
+      assert.strictEqual(
+        (yield* restarted.search({ query: "survives restart" }, project)).entries.length,
+        1,
+      );
+    }).pipe(Effect.scoped),
+  );
+
   it.effect("remembers, searches, lists and forgets within one project", () =>
     Effect.gen(function* () {
       const memory = yield* MemoryService.MemoryService;
