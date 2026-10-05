@@ -2,10 +2,36 @@ const assert = require("node:assert/strict");
 const { EventEmitter } = require("node:events");
 const path = require("node:path");
 const test = require("node:test");
-const { SourceLauncher, pairingUrlFromLine } = require("./launcher.cjs");
+const {
+  SourceLauncher,
+  isOrphanedRunner,
+  isOwnedRunner,
+  pairingUrlFromLine,
+} = require("./launcher.cjs");
 
 const root = path.resolve(__dirname, "..", "..");
 const tokenUrl = "http://localhost:5733/pair#token=SECRET_123";
+
+/** In-memory runner record, so tests never write into the checkout's real dev state. */
+function memoryRecord(initial, orphan = () => false) {
+  const record = { value: initial, stopped: [] };
+  record.api = {
+    read: () => record.value,
+    write: (pid) => (record.value = { pid }),
+    clear: (pid, previous) => {
+      if (record.value?.pid === pid) record.value = previous;
+    },
+    isOrphan: orphan,
+    stopGroup: (pid) => record.stopped.push(pid),
+  };
+  return record;
+}
+
+const SourceLauncherForTest = class extends SourceLauncher {
+  constructor(dir, options = {}) {
+    super(dir, { runnerRecord: memoryRecord().api, ...options });
+  }
+};
 
 function processFixture() {
   const child = new EventEmitter();
@@ -27,7 +53,7 @@ test("extracts only a local HTTP pairing URL from Effect's startup log", () => {
 test("starts from the checkout with isolated state and deduplicates startup", async () => {
   const child = processFixture();
   const calls = [];
-  const launcher = new SourceLauncher(root, {
+  const launcher = new SourceLauncherForTest(root, {
     spawnProcess: (...args) => {
       calls.push(args);
       return child;
@@ -61,7 +87,7 @@ test("starts from the checkout with isolated state and deduplicates startup", as
 test("can retry after startup failure, and stops only the child it started", async () => {
   const children = [processFixture(), processFixture()];
   const stopped = [];
-  const launcher = new SourceLauncher(root, {
+  const launcher = new SourceLauncherForTest(root, {
     spawnProcess: () => children.shift(),
     stopProcess: (child) => stopped.push(child),
   });
@@ -81,7 +107,7 @@ test("can retry after startup failure, and stops only the child it started", asy
 test("fails fast and stops its runner when another server already holds the dev state", async () => {
   const child = processFixture();
   const stopped = [];
-  const launcher = new SourceLauncher(root, {
+  const launcher = new SourceLauncherForTest(root, {
     spawnProcess: () => child,
     stopProcess: (target) => stopped.push(target),
   });
@@ -105,7 +131,7 @@ test("fails fast and stops its runner when another server already holds the dev 
 test("fails fast when the server process crashes but the dev runner keeps watching", async () => {
   const child = processFixture();
   const stopped = [];
-  const launcher = new SourceLauncher(root, {
+  const launcher = new SourceLauncherForTest(root, {
     spawnProcess: () => child,
     stopProcess: (target) => stopped.push(target),
   });
@@ -122,7 +148,7 @@ test("fails fast when the server process crashes but the dev runner keeps watchi
 test("gives up after the startup timeout instead of staying on Starting forever", async () => {
   const child = processFixture();
   const stopped = [];
-  const launcher = new SourceLauncher(root, {
+  const launcher = new SourceLauncherForTest(root, {
     spawnProcess: () => child,
     stopProcess: (target) => stopped.push(target),
     startupTimeoutMs: 20,
@@ -130,4 +156,102 @@ test("gives up after the startup timeout instead of staying on Starting forever"
   await assert.rejects(launcher.start(), /did not start within/);
   assert.equal(launcher.status, "stopped");
   assert.deepEqual(stopped, [child]);
+});
+
+test("stops the runner an earlier extension host left behind before starting a new one", async () => {
+  const record = memoryRecord({ pid: 9001 }, (entry) => entry.pid === 9001);
+  const child = processFixture();
+  const order = [];
+  const launcher = new SourceLauncher(root, {
+    spawnProcess: () => {
+      order.push("spawn");
+      return child;
+    },
+    stopProcess: () => {},
+    runnerRecord: {
+      ...record.api,
+      stopGroup: async (pid) => {
+        record.api.stopGroup(pid);
+        await new Promise((resolve) => setTimeout(resolve, 10));
+        order.push("orphan stopped");
+      },
+    },
+  });
+  const start = launcher.start();
+  assert.equal(launcher.status, "starting");
+  assert.equal(launcher.start(), start);
+  await new Promise((resolve) => setTimeout(resolve, 30));
+  assert.deepEqual(order, ["orphan stopped", "spawn"]);
+  assert.deepEqual(record.stopped, [9001]);
+  assert.deepEqual(record.value, { pid: child.pid });
+  child.stdout.emit("data", `pairingUrl: ${tokenUrl}\n`);
+  await start;
+  launcher.stop();
+  assert.equal(record.value, undefined);
+});
+
+test("leaves another window's live runner alone and keeps it recorded when its own start fails", async () => {
+  const record = memoryRecord({ pid: 9002 }, () => false);
+  const child = processFixture();
+  const launcher = new SourceLauncher(root, {
+    spawnProcess: () => child,
+    stopProcess: () => {},
+    runnerRecord: record.api,
+  });
+  const start = launcher.start();
+  assert.deepEqual(record.stopped, []);
+  child.emit("exit", 0);
+  await assert.rejects(start, /dev runner exited/);
+  // The other window's runner is still the one to recover if that window later dies.
+  assert.deepEqual(record.value, { pid: 9002 });
+});
+
+test("recognises only this checkout's exact dev runner command", () => {
+  const devHome = path.join(root, ".t3", "vscode-dev");
+  const runner = `node scripts/dev-runner.ts dev --home-dir ${devHome}`;
+  assert.equal(
+    isOwnedRunner(root, 1, () => runner),
+    true,
+  );
+  assert.equal(
+    isOwnedRunner(root, 1, () => `${runner}-other`),
+    false,
+  );
+  assert.equal(
+    isOwnedRunner(root, 1, () => "node unrelated.js"),
+    false,
+  );
+  assert.equal(
+    isOwnedRunner(root, 1, () => undefined),
+    false,
+  );
+});
+
+test("treats a runner as orphaned only when the window that started it is gone", () => {
+  const devHome = path.join(root, ".t3", "vscode-dev");
+  const runner = () => `node scripts/dev-runner.ts dev --home-dir ${devHome}`;
+  const record = { pid: 500, owner: 600 };
+  assert.equal(
+    isOrphanedRunner(root, record, runner, () => false),
+    true,
+  );
+  // Another VS Code window still owns it: leave it alone.
+  assert.equal(
+    isOrphanedRunner(root, record, runner, () => true),
+    false,
+  );
+  // The recorded pid was reused by something else: never stop it.
+  assert.equal(
+    isOrphanedRunner(
+      root,
+      record,
+      () => "node other.js",
+      () => false,
+    ),
+    false,
+  );
+  assert.equal(
+    isOrphanedRunner(root, undefined, runner, () => false),
+    false,
+  );
 });
