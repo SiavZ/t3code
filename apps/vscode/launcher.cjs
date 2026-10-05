@@ -5,7 +5,9 @@ const path = require("node:path");
 // The startup URL contains a one-time administrative credential. Never write it
 // to the extension's output or persist it to VS Code workspace state.
 function pairingUrlFromLine(line) {
-  const candidate = line.match(/https?:\/\/(?:localhost|127\.0\.0\.1|\[::1\]):\d+\/pair#token=[A-Za-z0-9_-]+/)?.[0];
+  const candidate = line.match(
+    /https?:\/\/(?:localhost|127\.0\.0\.1|\[::1\]):\d+\/pair#token=[A-Za-z0-9_-]+/,
+  )?.[0];
   if (!candidate) return undefined;
   const url = new URL(candidate);
   return url.protocol === "http:" ? url : undefined;
@@ -60,7 +62,13 @@ class SourceLauncher {
     const child = this.spawnProcess(
       this.node,
       ["scripts/dev-runner.ts", "dev", "--home-dir", path.join(this.root, ".t3", "vscode-dev")],
-      { cwd: this.root, env, detached: platform() !== "win32", windowsHide: true, stdio: ["ignore", "pipe", "pipe"] },
+      {
+        cwd: this.root,
+        env,
+        detached: platform() !== "win32",
+        windowsHide: true,
+        stdio: ["ignore", "pipe", "pipe"],
+      },
     );
     this.child = child;
     this.setStatus("starting");
@@ -103,7 +111,11 @@ class SourceLauncher {
         }
         if (!settled) {
           settled = true;
-          reject(new Error(`T3 Code dev runner exited (${code ?? "signal"}). Run pnpm install in the checkout and check your Node.js version (24 required).`));
+          reject(
+            new Error(
+              `T3 Code dev runner exited (${code ?? "signal"}). Run pnpm install in the checkout and check your Node.js version (24 required).`,
+            ),
+          );
         }
       });
     });

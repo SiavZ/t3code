@@ -1,27 +1,17 @@
 {
   "name": "t3-code-source-dev",
   "displayName": "T3 Code Source Dev",
-  "description": "Open the T3 Code source checkout in VS Code without a terminal.",
   "version": "0.0.2",
-  "publisher": "t3tools",
   "private": true,
+  "description": "Open the T3 Code source checkout in VS Code without a terminal.",
   "license": "MIT",
   "repository": {
     "type": "git",
     "url": "https://github.com/pingdotgg/t3code.git",
     "directory": "apps/vscode"
   },
-  "engines": {
-    "vscode": "^1.113.0"
-  },
-  "extensionKind": ["workspace"],
+  "publisher": "t3tools",
   "main": "./extension.js",
-  "activationEvents": [
-    "onView:t3CodeSource.actions",
-    "onCommand:t3CodeSource.open",
-    "onCommand:t3CodeSource.chooseCheckout",
-    "onCommand:t3CodeSource.stop"
-  ],
   "scripts": {
     "test": "node --test *.test.cjs",
     "package": "npx --yes @vscode/vsce@4.0.0 package --no-dependencies"
@@ -71,5 +61,17 @@
         }
       }
     }
+  },
+  "activationEvents": [
+    "onCommand:t3CodeSource.chooseCheckout",
+    "onCommand:t3CodeSource.open",
+    "onCommand:t3CodeSource.stop",
+    "onView:t3CodeSource.actions"
+  ],
+  "extensionKind": [
+    "workspace"
+  ],
+  "engines": {
+    "vscode": "^1.113.0"
   }
 }

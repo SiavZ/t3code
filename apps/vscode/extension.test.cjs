@@ -19,7 +19,10 @@ function loadExtension(options = {}) {
   let provider;
   const view = {
     visible: true,
-    onDidChangeVisibility: (listener) => { onVisibility = listener; return { dispose() {} }; },
+    onDidChangeVisibility: (listener) => {
+      onVisibility = listener;
+      return { dispose() {} };
+    },
     dispose() {},
   };
   class FakeLauncher {
@@ -49,12 +52,21 @@ function loadExtension(options = {}) {
       getConfiguration: () => ({ get: () => "node" }),
     },
     window: {
-      createTreeView: (_id, options) => { provider = options.treeDataProvider; return view; },
+      createTreeView: (_id, options) => {
+        provider = options.treeDataProvider;
+        return view;
+      },
       showErrorMessage: (message) => errors.push(message),
-      showOpenDialog: async () => { pickerCalls += 1; return options.selection; },
+      showOpenDialog: async () => {
+        pickerCalls += 1;
+        return options.selection;
+      },
     },
     commands: {
-      registerCommand: (id, action) => { commands.set(id, action); return { dispose() {} }; },
+      registerCommand: (id, action) => {
+        commands.set(id, action);
+        return { dispose() {} };
+      },
       executeCommand: async (id, options) => opened.push({ id, options }),
     },
     EventEmitter: class {
@@ -62,13 +74,18 @@ function loadExtension(options = {}) {
       fire() {}
       dispose() {}
     },
-    TreeItem: function TreeItem(label) { return { label }; },
-    ThemeIcon: function ThemeIcon(id) { return { id }; },
+    TreeItem: function TreeItem(label) {
+      return { label };
+    },
+    ThemeIcon: function ThemeIcon(id) {
+      return { id };
+    },
   };
   const originalLoad = Module._load;
   Module._load = function (request, parent, isMain) {
     if (request === "vscode") return vscode;
-    if (request === "./launcher.cjs" && parent?.filename === require.resolve("./extension.js")) return { SourceLauncher: FakeLauncher };
+    if (request === "./launcher.cjs" && parent?.filename === require.resolve("./extension.js"))
+      return { SourceLauncher: FakeLauncher };
     return originalLoad.call(this, request, parent, isMain);
   };
   delete require.cache[require.resolve("./extension.js")];
@@ -78,10 +95,28 @@ function loadExtension(options = {}) {
       subscriptions: [],
       globalState: {
         get: (key) => state.get(key),
-        update: async (key, value) => { state.set(key, value); },
+        update: async (key, value) => {
+          state.set(key, value);
+        },
       },
     };
-    return { extension, context, state, view, commands, opened, errors, launchers, get pickerCalls() { return pickerCalls; }, get provider() { return provider; }, reveal: () => onVisibility({ visible: true }) };
+    return {
+      extension,
+      context,
+      state,
+      view,
+      commands,
+      opened,
+      errors,
+      launchers,
+      get pickerCalls() {
+        return pickerCalls;
+      },
+      get provider() {
+        return provider;
+      },
+      reveal: () => onVisibility({ visible: true }),
+    };
   } finally {
     Module._load = originalLoad;
   }
@@ -102,7 +137,10 @@ test("Activity Bar view opens the source app, reuses browser tab, and offers sto
   host.reveal();
   await flush();
   assert.equal(host.opened[1].options.url, "http://localhost:5733");
-  assert.deepEqual(host.provider.getChildren().map((item) => item.label), ["Open T3 Code", "Stop source server", "Choose source checkout"]);
+  assert.deepEqual(
+    host.provider.getChildren().map((item) => item.label),
+    ["Open T3 Code", "Stop source server", "Choose source checkout"],
+  );
   host.commands.get("t3CodeSource.stop")();
   assert.equal(host.launchers[0].status, "stopped");
   host.reveal();
@@ -116,7 +154,11 @@ test("Activity Bar view opens the source app, reuses browser tab, and offers sto
 test("another project selects the source checkout once and remembers it", async () => {
   const state = new Map();
   const project = [{ uri: { fsPath: "/some/other/project" } }];
-  const host = loadExtension({ workspaceFolders: project, selection: [{ fsPath: checkout }], state });
+  const host = loadExtension({
+    workspaceFolders: project,
+    selection: [{ fsPath: checkout }],
+    state,
+  });
   host.extension.activate(host.context);
   await flush();
   assert.equal(host.launchers[0].root, checkout);
@@ -154,7 +196,9 @@ test("rejects an unrelated selected directory without starting a server", async 
 });
 
 test("Choose source checkout switches the source runner from another project", async () => {
-  const alternate = fs.mkdtempSync(path.join(process.env.JCODE_SCRATCH_DIR || os.tmpdir(), "t3-vscode-checkout-"));
+  const alternate = fs.mkdtempSync(
+    path.join(process.env.JCODE_SCRATCH_DIR || os.tmpdir(), "t3-vscode-checkout-"),
+  );
   fs.mkdirSync(path.join(alternate, "scripts"));
   fs.writeFileSync(path.join(alternate, "scripts", "dev-runner.ts"), "");
   fs.writeFileSync(path.join(alternate, "package.json"), '{"name":"@t3tools/monorepo"}');
