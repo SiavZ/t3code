@@ -1,4 +1,5 @@
-const { spawn } = require("node:child_process");
+const { execFileSync, spawn } = require("node:child_process");
+const fs = require("node:fs");
 const { platform } = require("node:os");
 const path = require("node:path");
 
@@ -39,6 +40,106 @@ function startupFailureFromLine(line) {
 
 const STARTUP_TIMEOUT_MS = 5 * 60 * 1000;
 
+function devHome(root) {
+  return path.join(root, ".t3", "vscode-dev");
+}
+
+function runnerRecordPath(root) {
+  return path.join(devHome(root), "vscode-launcher-runner.json");
+}
+
+// An extension host that VS Code restarts while unresponsive never runs deactivate(), so the
+// detached runner it spawned keeps holding the dev state under launchd. The launcher records the
+// process group it owns and, on the next start, stops it if it is still this checkout's runner.
+function processCommand(pid) {
+  try {
+    return execFileSync("ps", ["-o", "command=", "-p", String(pid)], { encoding: "utf8" }).trim();
+  } catch {
+    return undefined;
+  }
+}
+
+function isOwnedRunner(root, pid, readCommand = processCommand) {
+  const command = readCommand(pid);
+  return command === `node scripts/dev-runner.ts dev --home-dir ${devHome(root)}`;
+}
+
+function readRunnerRecord(root) {
+  try {
+    const record = JSON.parse(fs.readFileSync(runnerRecordPath(root), "utf8"));
+    if (!Number.isInteger(record.pid) || record.pid <= 1) return undefined;
+    return { pid: record.pid, owner: Number.isInteger(record.owner) ? record.owner : undefined };
+  } catch {
+    return undefined;
+  }
+}
+
+function writeRunnerRecord(root, pid) {
+  try {
+    fs.mkdirSync(devHome(root), { recursive: true });
+    fs.writeFileSync(runnerRecordPath(root), JSON.stringify({ pid, owner: process.pid }));
+  } catch {}
+}
+
+/**
+ * Drop this launcher's record. If it replaced another window's still-running runner, put that
+ * record back so the runner stays recoverable when its own window later dies.
+ */
+function clearRunnerRecord(root, pid, previous) {
+  try {
+    if (readRunnerRecord(root)?.pid !== pid) return;
+    if (previous && previous.pid !== pid && isOwnedRunner(root, previous.pid)) {
+      fs.writeFileSync(runnerRecordPath(root), JSON.stringify(previous));
+    } else {
+      fs.rmSync(runnerRecordPath(root));
+    }
+  } catch {}
+}
+
+function processAlive(pid) {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return error.code === "EPERM";
+  }
+}
+
+/**
+ * A recorded runner is an orphan only when the extension host that started it is gone. A runner
+ * whose owner is still alive belongs to another VS Code window and must not be stopped from here.
+ */
+function isOrphanedRunner(root, record, readCommand = processCommand, ownerAlive = processAlive) {
+  if (!record || !isOwnedRunner(root, record.pid, readCommand)) return false;
+  return record.owner === undefined || record.owner === process.pid || !ownerAlive(record.owner);
+}
+
+function groupAlive(pid) {
+  try {
+    process.kill(-pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** Stop a leftover runner's process group and wait (up to ~5 s) until it has released its ports. */
+async function stopGroup(pid) {
+  try {
+    process.kill(-pid, "SIGTERM");
+  } catch {
+    return;
+  }
+  for (let waited = 0; waited < 5000 && groupAlive(pid); waited += 100) {
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  if (groupAlive(pid)) {
+    try {
+      process.kill(-pid, "SIGKILL");
+    } catch {}
+  }
+}
+
 function stopChild(child) {
   if (!child.pid) return;
   if (platform() === "win32") {
@@ -66,6 +167,13 @@ class SourceLauncher {
     this.stopProcess = options.stopProcess || stopChild;
     this.onState = options.onState || (() => {});
     this.startupTimeoutMs = options.startupTimeoutMs ?? STARTUP_TIMEOUT_MS;
+    this.runnerRecord = options.runnerRecord || {
+      read: () => readRunnerRecord(root),
+      write: (pid) => writeRunnerRecord(root, pid),
+      clear: (pid, previous) => clearRunnerRecord(root, pid, previous),
+      isOrphan: (record) => isOrphanedRunner(root, record),
+      stopGroup,
+    };
     this.child = undefined;
     this.starting = undefined;
     this.url = undefined;
@@ -80,6 +188,26 @@ class SourceLauncher {
   start() {
     if (this.child && this.url) return Promise.resolve(this.url);
     if (this.starting) return this.starting;
+    // Only a POSIX runner is a detached process group that can outlive its extension host.
+    const orphan = platform() !== "win32" ? this.runnerRecord.read() : undefined;
+    if (orphan && this.runnerRecord.isOrphan(orphan)) {
+      this.setStatus("starting");
+      const pendingStart = Promise.resolve(this.runnerRecord.stopGroup(orphan.pid))
+        .then(() => {
+          this.runnerRecord.clear(orphan.pid);
+          this.starting = undefined;
+          return this.spawnRunner();
+        })
+        .finally(() => {
+          if (this.starting === pendingStart) this.starting = undefined;
+        });
+      this.starting = pendingStart;
+      return pendingStart;
+    }
+    return this.spawnRunner();
+  }
+
+  spawnRunner() {
     const env = { ...process.env };
     env.PATH = [path.join(this.root, "node_modules", ".bin"), env.PATH || ""].join(path.delimiter);
     delete env.T3CODE_HOME;
@@ -98,6 +226,10 @@ class SourceLauncher {
       },
     );
     this.child = child;
+    const previousRecord = platform() !== "win32" ? this.runnerRecord.read() : undefined;
+    if (platform() !== "win32" && child.pid) this.runnerRecord.write(child.pid);
+    const clearRecord = () => this.runnerRecord.clear(child.pid, previousRecord);
+    this.clearRecord = clearRecord;
     this.setStatus("starting");
     const starting = new Promise((resolve, reject) => {
       let settled = false;
@@ -121,6 +253,7 @@ class SourceLauncher {
           this.url = undefined;
           this.setStatus("stopped");
           this.stopProcess(child);
+          clearRecord();
         }
         reject(error);
       };
@@ -163,6 +296,7 @@ class SourceLauncher {
       });
       child.once("exit", (code) => {
         clearTimeout(timer);
+        clearRecord();
         if (this.child === child) {
           this.child = undefined;
           this.url = undefined;
@@ -192,7 +326,15 @@ class SourceLauncher {
     this.url = undefined;
     this.setStatus("stopped");
     this.stopProcess(child);
+    this.clearRecord?.();
   }
 }
 
-module.exports = { SourceLauncher, pairingUrlFromLine, startupFailureFromLine, stopChild };
+module.exports = {
+  SourceLauncher,
+  isOrphanedRunner,
+  isOwnedRunner,
+  pairingUrlFromLine,
+  startupFailureFromLine,
+  stopChild,
+};
