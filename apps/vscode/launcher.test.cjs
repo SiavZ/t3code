@@ -28,7 +28,10 @@ test("starts from the checkout with isolated state and deduplicates startup", as
   const child = processFixture();
   const calls = [];
   const launcher = new SourceLauncher(root, {
-    spawnProcess: (...args) => { calls.push(args); return child; },
+    spawnProcess: (...args) => {
+      calls.push(args);
+      return child;
+    },
     stopProcess: () => {},
   });
   const first = launcher.start();
@@ -36,7 +39,12 @@ test("starts from the checkout with isolated state and deduplicates startup", as
   assert.equal(calls.length, 1);
   const [command, args, options] = calls[0];
   assert.equal(command, "node");
-  assert.deepEqual(args, ["scripts/dev-runner.ts", "dev", "--home-dir", path.join(root, ".t3", "vscode-dev")]);
+  assert.deepEqual(args, [
+    "scripts/dev-runner.ts",
+    "dev",
+    "--home-dir",
+    path.join(root, ".t3", "vscode-dev"),
+  ]);
   assert.equal(options.cwd, root);
   assert.equal(options.env.T3CODE_HOME, undefined);
   assert.equal(options.env.VITE_HTTP_URL, undefined);
