@@ -11,6 +11,7 @@ const tokenUrl = "http://localhost:5733/pair#token=SECRET_123";
 function loadExtension(options = {}) {
   const commands = new Map();
   const opened = [];
+  const external = [];
   const errors = [];
   const launchers = [];
   const state = options.state || new Map();
@@ -86,7 +87,15 @@ function loadExtension(options = {}) {
         commands.set(id, action);
         return { dispose() {} };
       },
+      getCommands: async () =>
+        options.integratedBrowser === false ? [] : ["workbench.action.browser.open"],
       executeCommand: async (id, options) => opened.push({ id, options }),
+    },
+    env: {
+      openExternal: async (uri) => external.push(uri.toString(true)),
+    },
+    Uri: {
+      parse: (value) => ({ toString: () => value }),
     },
     EventEmitter: class {
       event = () => ({ dispose() {} });
@@ -126,6 +135,7 @@ function loadExtension(options = {}) {
       view,
       commands,
       opened,
+      external,
       errors,
       launchers,
       get pickerCalls() {
@@ -227,6 +237,16 @@ test("Stop is offered while starting, and a stopped start does not block the nex
   await host.commands.get("t3CodeSource.open")();
   assert.equal(host.opened.at(-1).options.url, tokenUrl);
   assert.equal(host.launchers[0].status, "ready");
+  host.extension.deactivate();
+});
+
+test("VS Code for the Web, which has no Integrated Browser, opens the app externally", async () => {
+  const host = loadExtension({ integratedBrowser: false });
+  host.extension.activate(host.context);
+  await flush();
+  assert.deepEqual(host.opened, []);
+  assert.deepEqual(host.external, [tokenUrl]);
+  assert.deepEqual(host.errors, []);
   host.extension.deactivate();
 });
 
