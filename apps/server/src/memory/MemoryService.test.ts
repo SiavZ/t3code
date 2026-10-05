@@ -166,4 +166,21 @@ layer("MemoryService", (it) => {
       assert.isFalse(yield* memory.forget({ id: MemoryEntryId.make("mem_missing") }, projectA));
     }),
   );
+
+  it.effect("recalls a one-character name as a whole word, not inside other words", () =>
+    Effect.gen(function* () {
+      const memory = yield* MemoryService.MemoryService;
+      const project = { projectId: ProjectId.make("project-short") };
+      const r = yield* memory.remember(
+        { category: "fact", content: "Analysis scripts are written in R" },
+        project,
+      );
+      yield* memory.remember({ category: "fact", content: "Every error is logged" }, project);
+      const found = yield* memory.search({ query: "R" }, project);
+      assert.deepEqual(
+        found.entries.map((entry) => entry.id),
+        [r.id],
+      );
+    }),
+  );
 });

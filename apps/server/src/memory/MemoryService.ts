@@ -62,9 +62,19 @@ export class MemoryService extends Context.Service<
   }
 >()("t3/memory/MemoryService") {}
 
-/** Lowercased words of 2 to 64 letters, digits, `_` or `-`, at most 32 per query. */
+/**
+ * Lowercased words of 1 to 64 letters, digits, `_` or `-`, at most 32 per query. One-character
+ * terms stay searchable so names like `R` or `C` can be recalled.
+ */
 export const queryTerms = (text: string): ReadonlyArray<string> =>
-  [...new Set(text.toLocaleLowerCase().match(/[\p{L}\p{N}_-]{2,64}/gu) ?? [])].slice(0, 32);
+  [...new Set(text.toLocaleLowerCase().match(/[\p{L}\p{N}_-]{1,64}/gu) ?? [])].slice(0, 32);
+
+/**
+ * Longer terms match anywhere in the content. A one-character term matches only a whole word,
+ * otherwise `r` would match nearly every note.
+ */
+const matchesTerm = (content: string, words: ReadonlySet<string>, term: string) =>
+  term.length === 1 ? words.has(term) : content.includes(term);
 
 const ProjectRequest = Schema.Struct({ projectId: Schema.String });
 
@@ -174,7 +184,8 @@ const make = Effect.gen(function* () {
       .filter((entry) => input.category === undefined || entry.category === input.category)
       .map((entry) => {
         const content = entry.content.toLocaleLowerCase();
-        return { entry, score: terms.filter((term) => content.includes(term)).length };
+        const words = new Set(content.match(/[\p{L}\p{N}_-]+/gu) ?? []);
+        return { entry, score: terms.filter((term) => matchesTerm(content, words, term)).length };
       })
       .filter(({ score }) => score > 0)
       // Stable sort keeps newest-first among equal scores.
