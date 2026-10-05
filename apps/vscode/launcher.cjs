@@ -2,9 +2,10 @@ const { execFileSync, spawn } = require("node:child_process");
 const fs = require("node:fs");
 const { platform } = require("node:os");
 const path = require("node:path");
+const { stripVTControlCharacters } = require("node:util");
 
-// The startup URL contains a one-time administrative credential. Never write it
-// to the extension's output or persist it to VS Code workspace state.
+// The startup URL contains a one-time administrative credential. Never persist it to VS Code
+// workspace state, and pass runner output through redactOutputLine before showing it.
 function pairingUrlFromLine(line) {
   const candidate = line.match(
     /https?:\/\/(?:localhost|127\.0\.0\.1|\[::1\]):\d+\/pair#token=[A-Za-z0-9_-]+/,
@@ -13,6 +14,16 @@ function pairingUrlFromLine(line) {
   const url = new URL(candidate);
   return url.protocol === "http:" ? url : undefined;
 }
+
+/** A runner output line as shown in VS Code: no terminal colors, and every token value masked. */
+function redactOutputLine(line) {
+  return stripVTControlCharacters(line).replace(
+    /(token"?\s*[=:]\s*"?)[^\s&"',}]+/gi,
+    "$1<redacted>",
+  );
+}
+
+const SEE_OUTPUT = "Check the T3 Code Source output for details.";
 
 // The dev runner stays alive when its server process fails (node --watch waits for file changes),
 // so a failed start never exits. These lines mean the server gave up; surface them instead of
@@ -25,8 +36,7 @@ const STARTUP_FAILURES = [
   },
   {
     pattern: /Failed running '.+?'\. Waiting for file changes before restarting/,
-    message: () =>
-      "The T3 Code server failed to start. Run `node scripts/dev-runner.ts dev` in the checkout to see why.",
+    message: () => `The T3 Code server failed to start. ${SEE_OUTPUT}`,
   },
 ];
 
@@ -39,6 +49,13 @@ function startupFailureFromLine(line) {
 }
 
 const STARTUP_TIMEOUT_MS = 5 * 60 * 1000;
+
+/** Rejection of a start that Stop cancelled. Callers treat it as an outcome, not an error. */
+function startCancelled() {
+  const error = new Error("T3 Code was stopped before it finished starting.");
+  error.cancelled = true;
+  return error;
+}
 
 function devHome(root) {
   return path.join(root, ".t3", "vscode-dev");
@@ -53,7 +70,9 @@ function runnerRecordPath(root) {
 // process group it owns and, on the next start, stops it if it is still this checkout's runner.
 function processCommand(pid) {
   try {
-    return execFileSync("ps", ["-o", "command=", "-p", String(pid)], { encoding: "utf8" }).trim();
+    return execFileSync("ps", ["-ww", "-o", "command=", "-p", String(pid)], {
+      encoding: "utf8",
+    }).trim();
   } catch {
     return undefined;
   }
@@ -61,7 +80,8 @@ function processCommand(pid) {
 
 function isOwnedRunner(root, pid, readCommand = processCommand) {
   const command = readCommand(pid);
-  return command === `node scripts/dev-runner.ts dev --home-dir ${devHome(root)}`;
+  // Any Node executable (t3CodeSource.nodePath), but exactly this checkout's runner and dev state.
+  return command?.endsWith(` scripts/dev-runner.ts dev --home-dir ${devHome(root)}`) === true;
 }
 
 function readRunnerRecord(root) {
@@ -123,11 +143,12 @@ function groupAlive(pid) {
   }
 }
 
-/** Stop a leftover runner's process group and wait (up to ~5 s) until it has released its ports. */
-async function stopGroup(pid) {
+/** Stop a runner's process group and wait (up to ~5 s) until it has released its ports. */
+async function stopGroup(pid, onSignalError) {
   try {
     process.kill(-pid, "SIGTERM");
-  } catch {
+  } catch (error) {
+    if (error.code !== "ESRCH") onSignalError?.();
     return;
   }
   for (let waited = 0; waited < 5000 && groupAlive(pid); waited += 100) {
@@ -140,6 +161,7 @@ async function stopGroup(pid) {
   }
 }
 
+/** Stop a runner this launcher spawned. On POSIX the promise settles once its group has exited. */
 function stopChild(child) {
   if (!child.pid) return;
   if (platform() === "win32") {
@@ -150,13 +172,9 @@ function stopChild(child) {
     killer.on("error", () => child.kill());
     return;
   }
-  try {
-    // The PID belongs to the detached process group we created, not a process
-    // discovered by name. The dev runner's own children stay in that group.
-    process.kill(-child.pid, "SIGTERM");
-  } catch (error) {
-    if (error.code !== "ESRCH") child.kill("SIGTERM");
-  }
+  // The PID belongs to the detached process group we created, not a process
+  // discovered by name. The dev runner's own children stay in that group.
+  return stopGroup(child.pid, () => child.kill("SIGTERM"));
 }
 
 class SourceLauncher {
@@ -166,6 +184,7 @@ class SourceLauncher {
     this.spawnProcess = options.spawnProcess || spawn;
     this.stopProcess = options.stopProcess || stopChild;
     this.onState = options.onState || (() => {});
+    this.onOutput = options.onOutput || (() => {});
     this.startupTimeoutMs = options.startupTimeoutMs ?? STARTUP_TIMEOUT_MS;
     this.runnerRecord = options.runnerRecord || {
       read: () => readRunnerRecord(root),
@@ -176,6 +195,8 @@ class SourceLauncher {
     };
     this.child = undefined;
     this.starting = undefined;
+    this.cancelStart = undefined;
+    this.stopping = undefined;
     this.url = undefined;
     this.status = "stopped";
   }
@@ -188,23 +209,45 @@ class SourceLauncher {
   start() {
     if (this.child && this.url) return Promise.resolve(this.url);
     if (this.starting) return this.starting;
+    // Never start next to a runner that still holds this checkout's dev state: one this launcher
+    // is still stopping, or one an earlier extension host left behind.
+    const previous = this.stopping ? [this.stopping] : [];
     // Only a POSIX runner is a detached process group that can outlive its extension host.
     const orphan = platform() !== "win32" ? this.runnerRecord.read() : undefined;
     if (orphan && this.runnerRecord.isOrphan(orphan)) {
-      this.setStatus("starting");
-      const pendingStart = Promise.resolve(this.runnerRecord.stopGroup(orphan.pid))
-        .then(() => {
-          this.runnerRecord.clear(orphan.pid);
-          this.starting = undefined;
-          return this.spawnRunner();
-        })
-        .finally(() => {
-          if (this.starting === pendingStart) this.starting = undefined;
-        });
-      this.starting = pendingStart;
-      return pendingStart;
+      previous.push(
+        Promise.resolve(this.runnerRecord.stopGroup(orphan.pid)).then(() =>
+          this.runnerRecord.clear(orphan.pid),
+        ),
+      );
     }
-    return this.spawnRunner();
+    if (previous.length === 0) return this.spawnRunner();
+    this.setStatus("starting");
+    let cancelled = false;
+    this.cancelStart = () => (cancelled = true);
+    const pendingStart = Promise.all(previous)
+      .then(() => {
+        if (cancelled) throw startCancelled();
+        this.starting = undefined;
+        return this.spawnRunner();
+      })
+      .finally(() => {
+        if (this.starting === pendingStart) this.starting = undefined;
+      });
+    this.starting = pendingStart;
+    return pendingStart;
+  }
+
+  /** Stop a runner this launcher spawned; the next start waits until it has exited. */
+  releaseChild(child) {
+    const exited = this.stopProcess(child);
+    if (typeof exited?.then !== "function") return;
+    const stopping = Promise.resolve(exited)
+      .catch(() => {})
+      .finally(() => {
+        if (this.stopping === stopping) this.stopping = undefined;
+      });
+    this.stopping = stopping;
   }
 
   spawnRunner() {
@@ -239,7 +282,7 @@ class SourceLauncher {
         if (settled || this.child !== child) return;
         fail(
           new Error(
-            `T3 Code did not start within ${Math.round(this.startupTimeoutMs / 1000)} seconds. Run \`node scripts/dev-runner.ts dev\` in the checkout to see why.`,
+            `T3 Code did not start within ${Math.round(this.startupTimeoutMs / 1000)} seconds. ${SEE_OUTPUT}`,
           ),
         );
       }, this.startupTimeoutMs);
@@ -252,11 +295,12 @@ class SourceLauncher {
           this.child = undefined;
           this.url = undefined;
           this.setStatus("stopped");
-          this.stopProcess(child);
+          this.releaseChild(child);
           clearRecord();
         }
         reject(error);
       };
+      this.cancelStart = () => fail(startCancelled());
       const consume = (stream) => {
         let pending = "";
         stream.on("data", (chunk) => {
@@ -264,6 +308,7 @@ class SourceLauncher {
           const lines = pending.split(/\r?\n/);
           pending = lines.pop().slice(-4096);
           for (const line of lines) {
+            this.onOutput(redactOutputLine(line));
             if (settled || this.child !== child) continue;
             const failure = startupFailureFromLine(line);
             if (failure) {
@@ -306,7 +351,7 @@ class SourceLauncher {
           settled = true;
           reject(
             new Error(
-              `T3 Code dev runner exited (${code ?? "signal"}). Run pnpm install in the checkout and check your Node.js version (24 required).`,
+              `The T3 Code dev runner exited (${code ?? "signal"}). ${SEE_OUTPUT} The checkout needs its dependencies (vp i) and Node.js 24.`,
             ),
           );
         }
@@ -320,12 +365,18 @@ class SourceLauncher {
   }
 
   stop() {
+    // Cancel a pending start too, so the next start launches a fresh runner instead of waiting on
+    // this one.
+    const cancel = this.cancelStart;
+    this.cancelStart = undefined;
+    this.starting = undefined;
+    cancel?.();
     const child = this.child;
-    if (!child) return;
     this.child = undefined;
     this.url = undefined;
-    this.setStatus("stopped");
-    this.stopProcess(child);
+    if (this.status !== "stopped") this.setStatus("stopped");
+    if (!child) return;
+    this.releaseChild(child);
     this.clearRecord?.();
   }
 }
@@ -335,6 +386,7 @@ module.exports = {
   isOrphanedRunner,
   isOwnedRunner,
   pairingUrlFromLine,
+  redactOutputLine,
   startupFailureFromLine,
   stopChild,
 };

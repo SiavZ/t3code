@@ -15,6 +15,7 @@ function loadExtension(options = {}) {
   const launchers = [];
   const state = options.state || new Map();
   let pickerCalls = 0;
+  let hangingStarts = options.hangingStarts || 0;
   let onVisibility;
   let provider;
   const view = {
@@ -33,6 +34,15 @@ function loadExtension(options = {}) {
       launchers.push(this);
     }
     async start() {
+      if (hangingStarts > 0 && !this.child) {
+        hangingStarts -= 1;
+        // A runner that never reports a pairing URL until Stop cancels it.
+        this.status = "starting";
+        this.options.onState();
+        return new Promise((_resolve, reject) => {
+          this.cancel = () => reject(Object.assign(new Error("stopped"), { cancelled: true }));
+        });
+      }
       if (!this.child) {
         this.child = {};
         this.status = "ready";
@@ -41,6 +51,8 @@ function loadExtension(options = {}) {
       return new URL(tokenUrl);
     }
     stop() {
+      this.cancel?.();
+      this.cancel = undefined;
       this.child = undefined;
       this.status = "stopped";
       this.options.onState();
@@ -56,7 +68,14 @@ function loadExtension(options = {}) {
         provider = options.treeDataProvider;
         return view;
       },
-      showErrorMessage: (message) => errors.push(message),
+      createOutputChannel: () => ({
+        appendLine() {},
+        show() {},
+        dispose() {},
+      }),
+      showErrorMessage: async (message) => {
+        errors.push(message);
+      },
       showOpenDialog: async () => {
         pickerCalls += 1;
         return options.selection;
@@ -173,6 +192,42 @@ test("another project selects the source checkout once and remembers it", async 
   assert.equal(second.pickerCalls, 0);
   assert.equal(second.launchers[0].root, checkout);
   second.extension.deactivate();
+});
+
+test("a checkout found in the workspace is remembered for other projects", async () => {
+  const state = new Map();
+  const host = loadExtension({ state });
+  host.extension.activate(host.context);
+  await flush();
+  assert.equal(host.pickerCalls, 0);
+  host.extension.deactivate();
+
+  const other = loadExtension({
+    workspaceFolders: [{ uri: { fsPath: "/some/other/project" } }],
+    state,
+  });
+  other.extension.activate(other.context);
+  await flush();
+  assert.equal(other.pickerCalls, 0);
+  assert.equal(other.launchers[0].root, checkout);
+  other.extension.deactivate();
+});
+
+test("Stop is offered while starting, and a stopped start does not block the next open", async () => {
+  const host = loadExtension({ hangingStarts: 1 });
+  host.extension.activate(host.context);
+  await flush();
+  assert.deepEqual(
+    host.provider.getChildren().map((item) => item.label),
+    ["Starting T3 Code from source…", "Stop source server"],
+  );
+  host.commands.get("t3CodeSource.stop")();
+  await flush();
+  assert.deepEqual(host.errors, []);
+  await host.commands.get("t3CodeSource.open")();
+  assert.equal(host.opened.at(-1).options.url, tokenUrl);
+  assert.equal(host.launchers[0].status, "ready");
+  host.extension.deactivate();
 });
 
 test("canceling checkout selection does not start a server or show an error", async () => {

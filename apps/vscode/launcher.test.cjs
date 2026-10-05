@@ -7,6 +7,7 @@ const {
   isOrphanedRunner,
   isOwnedRunner,
   pairingUrlFromLine,
+  redactOutputLine,
 } = require("./launcher.cjs");
 
 const root = path.resolve(__dirname, "..", "..");
@@ -48,6 +49,104 @@ test("extracts only a local HTTP pairing URL from Effect's startup log", () => {
   assert.equal(pairingUrlFromLine("http://evil.example/pair#token=SECRET"), undefined);
   assert.equal(pairingUrlFromLine("https://localhost:5733/pair#token=SECRET"), undefined);
   assert.equal(pairingUrlFromLine("http://localhost:5733/"), undefined);
+});
+
+test("redacts every credential form the dev server prints before it reaches VS Code", () => {
+  const lines = [
+    `\x1b[32mINFO\x1b[0m Authentication required. pairingUrl: ${tokenUrl}`,
+    'timestamp=… message="Authentication required." pairingUrl=http://localhost:5733/pair#token=SECRET_123',
+    "Token: SECRET_123",
+    '{"pairingUrl":"http://localhost:5733/pair#token=SECRET_123","token":"SECRET_123"}',
+    "http://localhost:5733/?token=SECRET_123&next=/",
+  ];
+  for (const line of lines) {
+    const shown = redactOutputLine(line);
+    assert.doesNotMatch(shown, /SECRET_123/);
+    assert.match(shown, /<redacted>/);
+    assert.ok(!shown.includes("\x1b"));
+  }
+  assert.equal(
+    redactOutputLine("Server listening on http://127.0.0.1:13773"),
+    "Server listening on http://127.0.0.1:13773",
+  );
+});
+
+test("Stop during startup cancels it, and the next start waits for that runner to exit", async () => {
+  const children = [processFixture(), processFixture()];
+  const exits = [];
+  const order = [];
+  const launcher = new SourceLauncherForTest(root, {
+    spawnProcess: () => {
+      order.push("spawn");
+      return children.shift();
+    },
+    stopProcess: () =>
+      new Promise((resolve) => {
+        exits.push(() => {
+          order.push("first runner exited");
+          resolve();
+        });
+      }),
+  });
+  const first = launcher.start();
+  launcher.stop();
+  await assert.rejects(first, (error) => error.cancelled === true);
+  assert.equal(launcher.status, "stopped");
+
+  const second = launcher.start();
+  assert.notEqual(second, first);
+  assert.equal(launcher.status, "starting");
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(order, ["spawn"]);
+  exits[0]();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(order, ["spawn", "first runner exited", "spawn"]);
+  launcher.child.stdout.emit("data", `pairingUrl: ${tokenUrl}\n`);
+  assert.equal((await second).href, tokenUrl);
+  assert.equal(launcher.status, "ready");
+});
+
+test("Stop while clearing a leftover runner cancels the start without spawning", async () => {
+  const record = memoryRecord({ pid: 9003 }, () => true);
+  let releaseOrphan;
+  let spawned = 0;
+  const launcher = new SourceLauncher(root, {
+    spawnProcess: () => {
+      spawned += 1;
+      return processFixture();
+    },
+    stopProcess: () => {},
+    runnerRecord: {
+      ...record.api,
+      stopGroup: () => new Promise((resolve) => (releaseOrphan = resolve)),
+    },
+  });
+  const start = launcher.start();
+  assert.equal(launcher.status, "starting");
+  launcher.stop();
+  assert.equal(launcher.status, "stopped");
+  releaseOrphan();
+  await assert.rejects(start, (error) => error.cancelled === true);
+  assert.equal(spawned, 0);
+  assert.equal(record.value, undefined);
+});
+
+test("shows runner output, redacted, as it arrives", async () => {
+  const child = processFixture();
+  const shown = [];
+  const launcher = new SourceLauncherForTest(root, {
+    spawnProcess: () => child,
+    stopProcess: () => {},
+    onOutput: (line) => shown.push(line),
+  });
+  const start = launcher.start();
+  child.stderr.emit("data", "Error: listen EADDRINUSE: address already in use :::5733\n");
+  child.stdout.emit("data", `pairingUrl: ${tokenUrl}\n`);
+  await start;
+  assert.deepEqual(shown, [
+    "Error: listen EADDRINUSE: address already in use :::5733",
+    "pairingUrl: http://localhost:5733/pair#token=<redacted>",
+  ]);
 });
 
 test("starts from the checkout with isolated state and deduplicates startup", async () => {
@@ -93,7 +192,7 @@ test("can retry after startup failure, and stops only the child it started", asy
   });
   const failure = launcher.start();
   launcher.child.emit("exit", 1);
-  await assert.rejects(failure, /pnpm install/);
+  await assert.rejects(failure, /dev runner exited \(1\)\. Check the T3 Code Source output/);
   assert.equal(launcher.status, "stopped");
   const success = launcher.start();
   const current = launcher.child;
@@ -212,6 +311,15 @@ test("recognises only this checkout's exact dev runner command", () => {
   assert.equal(
     isOwnedRunner(root, 1, () => runner),
     true,
+  );
+  // A custom t3CodeSource.nodePath is still this checkout's runner.
+  assert.equal(
+    isOwnedRunner(root, 1, () => `/opt/homebrew/opt/node@24/bin/${runner}`),
+    true,
+  );
+  assert.equal(
+    isOwnedRunner(root, 1, () => runner.replace(devHome, "/elsewhere/.t3/vscode-dev")),
+    false,
   );
   assert.equal(
     isOwnedRunner(root, 1, () => `${runner}-other`),
