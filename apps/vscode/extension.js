@@ -23,7 +23,10 @@ async function sourceRoot(context, choose = false) {
     if (saved && isSourceRoot(saved)) return saved;
   }
   for (const folder of vscode.workspace.workspaceFolders || []) {
-    if (!choose && isSourceRoot(folder.uri.fsPath)) return folder.uri.fsPath;
+    if (!choose && isSourceRoot(folder.uri.fsPath)) {
+      await context.globalState.update("checkoutPath", folder.uri.fsPath);
+      return folder.uri.fsPath;
+    }
   }
   const selection = await vscode.window.showOpenDialog({
     canSelectFiles: false,
@@ -45,13 +48,17 @@ async function sourceRoot(context, choose = false) {
 
 function activate(context) {
   const changed = new vscode.EventEmitter();
+  const output = vscode.window.createOutputChannel("T3 Code Source");
   const provider = {
     onDidChangeTreeData: changed.event,
     getTreeItem: (item) => item,
     getChildren: () => {
       const status = launcher?.status || "stopped";
+      const stop = new vscode.TreeItem("Stop source server");
+      stop.iconPath = new vscode.ThemeIcon("debug-stop");
+      stop.command = { command: "t3CodeSource.stop", title: "Stop source server" };
       if (status === "starting") {
-        return [new vscode.TreeItem("Starting T3 Code from source…")];
+        return [new vscode.TreeItem("Starting T3 Code from source…"), stop];
       }
       const open = new vscode.TreeItem("Open T3 Code");
       open.iconPath = new vscode.ThemeIcon("browser");
@@ -60,9 +67,6 @@ function activate(context) {
       choose.iconPath = new vscode.ThemeIcon("folder-opened");
       choose.command = { command: "t3CodeSource.chooseCheckout", title: "Choose source checkout" };
       if (status !== "ready") return [open, choose];
-      const stop = new vscode.TreeItem("Stop source server");
-      stop.iconPath = new vscode.ThemeIcon("debug-stop");
-      stop.command = { command: "t3CodeSource.stop", title: "Stop source server" };
       return [open, stop, choose];
     },
   };
@@ -70,44 +74,57 @@ function activate(context) {
   let opening;
   let openedForChild;
 
-  async function open(choose = false) {
-    if (opening) return opening;
-    opening = (async () => {
-      const root = await sourceRoot(context, choose);
-      if (!root) return;
-      if (!launcher || launcher.root !== root) {
-        launcher?.stop();
-        launcher = new SourceLauncher(root, {
-          node: vscode.workspace.getConfiguration("t3CodeSource").get("nodePath", "node"),
-          onState: () => changed.fire(),
-        });
-        openedForChild = undefined;
-      }
-      const url = await launcher.start();
-      const firstOpen = openedForChild !== launcher.child;
-      const target = firstOpen ? url.href : url.origin;
-      await vscode.commands.executeCommand("workbench.action.browser.open", {
-        url: target,
-        reuseUrlFilter: `${url.origin}/**`,
+  async function openSource(choose) {
+    const root = await sourceRoot(context, choose);
+    if (!root) return;
+    if (!launcher || launcher.root !== root) {
+      launcher?.stop();
+      launcher = new SourceLauncher(root, {
+        node: vscode.workspace.getConfiguration("t3CodeSource").get("nodePath", "node"),
+        onState: () => changed.fire(),
+        onOutput: (line) => output.appendLine(line),
       });
-      openedForChild = launcher.child;
-    })();
-    try {
-      await opening;
-    } catch (error) {
-      vscode.window.showErrorMessage(error instanceof Error ? error.message : String(error));
-    } finally {
-      opening = undefined;
+      openedForChild = undefined;
     }
+    const url = await launcher.start();
+    const firstOpen = openedForChild !== launcher.child;
+    const target = firstOpen ? url.href : url.origin;
+    await vscode.commands.executeCommand("workbench.action.browser.open", {
+      url: target,
+      reuseUrlFilter: `${url.origin}/**`,
+    });
+    openedForChild = launcher.child;
+  }
+
+  function open(choose = false) {
+    if (opening) return opening;
+    const current = openSource(choose)
+      .catch((error) => {
+        // Stop cancels a pending start on purpose; that is not an error to report.
+        if (error?.cancelled) return;
+        const message = error instanceof Error ? error.message : String(error);
+        // Not awaited: the notification can stay up indefinitely, and Open must work meanwhile.
+        void vscode.window.showErrorMessage(message, "Show Output").then((choice) => {
+          if (choice === "Show Output") output.show();
+        });
+      })
+      .finally(() => {
+        if (opening === current) opening = undefined;
+      });
+    opening = current;
+    return current;
   }
 
   function stop() {
+    // A stopped start must not swallow the next Open click.
+    opening = undefined;
     launcher?.stop();
     openedForChild = undefined;
   }
 
   context.subscriptions.push(
     changed,
+    output,
     view,
     vscode.commands.registerCommand("t3CodeSource.open", () => open()),
     vscode.commands.registerCommand("t3CodeSource.chooseCheckout", () => open(true)),
