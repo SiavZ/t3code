@@ -10,4 +10,4 @@ The selected checkout is remembered across VS Code workspaces. Use **Choose sour
 
 If startup fails, the error links to the **T3 Code Source** output, which shows the dev runner's log with credentials redacted.
 
-The browser is an editor tab rather than the narrow sidebar itself. The Activity Bar view provides **Open T3 Code** and **Stop source server** actions. In a remote VS Code workspace, install the extension on the workspace side so the server runs where the checkout lives. If VS Code cannot find Node.js, set `t3CodeSource.nodePath` to your Node.js 24 executable.
+The browser is an editor tab rather than the narrow sidebar itself. VS Code for the Web has no Integrated Browser, so there the app opens in a new browser tab. The Activity Bar view provides **Open T3 Code** and **Stop source server** actions. In a remote VS Code workspace, install the extension on the workspace side so the server runs where the checkout lives. If VS Code cannot find Node.js, set `t3CodeSource.nodePath` to your Node.js 24 executable.

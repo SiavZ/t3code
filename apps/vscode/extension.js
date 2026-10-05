@@ -46,6 +46,23 @@ async function sourceRoot(context, choose = false) {
   return root;
 }
 
+const INTEGRATED_BROWSER = "workbench.action.browser.open";
+
+/**
+ * Desktop VS Code opens the app in its Integrated Browser and reuses the tab. VS Code for the Web
+ * has no Integrated Browser, so the app opens in a browser tab, port-forwarded when remote.
+ */
+async function openBrowser(url, target) {
+  if ((await vscode.commands.getCommands(true)).includes(INTEGRATED_BROWSER)) {
+    await vscode.commands.executeCommand(INTEGRATED_BROWSER, {
+      url: target,
+      reuseUrlFilter: `${url.origin}/**`,
+    });
+    return;
+  }
+  await vscode.env.openExternal(vscode.Uri.parse(target, true));
+}
+
 function activate(context) {
   const changed = new vscode.EventEmitter();
   const output = vscode.window.createOutputChannel("T3 Code Source");
@@ -89,10 +106,7 @@ function activate(context) {
     const url = await launcher.start();
     const firstOpen = openedForChild !== launcher.child;
     const target = firstOpen ? url.href : url.origin;
-    await vscode.commands.executeCommand("workbench.action.browser.open", {
-      url: target,
-      reuseUrlFilter: `${url.origin}/**`,
-    });
+    await openBrowser(url, target);
     openedForChild = launcher.child;
   }
 
