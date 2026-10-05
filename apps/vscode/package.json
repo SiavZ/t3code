@@ -1,7 +1,7 @@
 {
   "name": "t3-code-source-dev",
   "displayName": "T3 Code Source Dev",
-  "version": "0.0.2",
+  "version": "0.0.3",
   "private": true,
   "description": "Open the T3 Code source checkout in VS Code without a terminal.",
   "license": "MIT",
