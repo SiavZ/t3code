@@ -9,11 +9,11 @@ import {
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
-import { McpSchema, McpServer } from "effect/unstable/ai";
+import { McpSchema, McpServer } from "effect/ai";
 
 import * as MemoryService from "../../../memory/MemoryService.ts";
 import * as Orchestrator from "../../../orchestration-v2/Orchestrator.ts";
-import { SqlitePersistenceMemory } from "../../../persistence/Layers/Sqlite.ts";
+import * as Sqlite from "../../../persistence/Sqlite.ts";
 import * as McpHttpServer from "../../McpHttpServer.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
 
@@ -24,11 +24,11 @@ const projectOf: Record<string, ProjectId> = {
   [threadB]: ProjectId.make("project-memory-b"),
 };
 
-const TestLayer = McpHttpServer.MemoryToolkitRegistrationLive.pipe(
+const TestLayer = McpHttpServer.layerMemoryToolkit.pipe(
   Layer.provideMerge(McpServer.McpServer.layer),
   Layer.provideMerge(
     MemoryService.layer.pipe(
-      Layer.provideMerge(SqlitePersistenceMemory),
+      Layer.provideMerge(Sqlite.layerMemory),
       Layer.provideMerge(NodeServices.layer),
     ),
   ),
@@ -67,9 +67,13 @@ const call = (
     const result = yield* server.callTool({ name, arguments: args }).pipe(
       Effect.provideService(McpInvocationContext.McpInvocationContext, {
         environmentId: EnvironmentId.make("environment-memory-test"),
-        threadId: input.threadId,
-        providerSessionId: "provider-session-memory-test",
-        providerInstanceId: ProviderInstanceId.make("codex"),
+        requestNamespace: "provider-session-memory-test",
+        thread: {
+          threadId: input.threadId,
+          providerSessionId: "provider-session-memory-test",
+          providerInstanceId: ProviderInstanceId.make("codex"),
+        },
+        client: undefined,
         capabilities: new Set(input.memory ? (["memory"] as const) : ([] as const)),
         issuedAt: 1,
       }),

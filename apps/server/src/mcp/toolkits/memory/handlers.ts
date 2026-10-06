@@ -12,11 +12,16 @@ const make = Effect.gen(function* () {
   /** The project always comes from the credential's thread, never from tool input. */
   const authority = Effect.gen(function* () {
     const scope = yield* McpInvocationContext.requireMcpCapability("memory");
+    // Only provider sessions T3 Code launched have a thread, and so a project.
+    const threadId = scope.thread?.threadId;
+    if (threadId === undefined) {
+      return yield* new MemoryThreadNotFoundError({ threadId: "(no thread)" });
+    }
     const thread = yield* engine
-      .getThreadShell(scope.threadId)
-      .pipe(Effect.mapError(() => new MemoryThreadNotFoundError({ threadId: scope.threadId })));
+      .getThreadShell(threadId)
+      .pipe(Effect.mapError(() => new MemoryThreadNotFoundError({ threadId })));
     if (thread === null || thread === undefined) {
-      return yield* new MemoryThreadNotFoundError({ threadId: scope.threadId });
+      return yield* new MemoryThreadNotFoundError({ threadId });
     }
     return {
       projectId: thread.projectId,

@@ -9,9 +9,9 @@ import {
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
-import * as SqlClient from "effect/unstable/sql/SqlClient";
+import * as SqlClient from "effect/sql/SqlClient";
 
-import { SqlitePersistenceMemory } from "../persistence/Layers/Sqlite.ts";
+import * as Sqlite from "../persistence/Sqlite.ts";
 import * as MemoryService from "./MemoryService.ts";
 
 const projectA = { projectId: ProjectId.make("project-a"), threadId: ThreadId.make("thread-a") };
@@ -19,7 +19,7 @@ const projectB = { projectId: ProjectId.make("project-b") };
 
 const layer = it.layer(
   MemoryService.layer.pipe(
-    Layer.provideMerge(SqlitePersistenceMemory),
+    Layer.provideMerge(Sqlite.layerMemory),
     Layer.provideMerge(NodeServices.layer),
   ),
 );

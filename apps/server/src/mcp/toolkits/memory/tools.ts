@@ -8,8 +8,7 @@ import {
   MemoryStorageError,
 } from "@t3tools/contracts";
 import * as Schema from "effect/Schema";
-import * as Tool from "effect/unstable/ai/Tool";
-import * as Toolkit from "effect/unstable/ai/Toolkit";
+import { Tool, Toolkit } from "effect/ai";
 
 import * as MemoryService from "../../../memory/MemoryService.ts";
 import * as Orchestrator from "../../../orchestration-v2/Orchestrator.ts";
