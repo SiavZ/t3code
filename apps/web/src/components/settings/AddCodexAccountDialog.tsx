@@ -1,3 +1,5 @@
+import { AuthProvidersManageScope } from "@t3tools/contracts";
+import { readEnvironmentScope, useEnvironmentScope } from "../../state/session";
 import { useAtomValue } from "@effect/atom-react";
 import {
   ProviderDriverKind,
@@ -16,7 +18,10 @@ import { Button } from "../ui/button";
 import { Dialog } from "../ui/dialog";
 import { Input } from "../ui/input";
 import { WizardFooter, WizardHeader, WizardPanel, WizardPopup } from "../ui/wizard";
+import { MultipleAccountsNote } from "./MultipleAccountsNote";
 import { SettingsRow } from "./settingsLayout";
+
+const CODEX_DRIVER_KIND = ProviderDriverKind.make("codex");
 
 export function AddCodexAccountDialog({
   environmentId,
@@ -31,6 +36,7 @@ export function AddCodexAccountDialog({
     | undefined;
   readonly renderSetup: (instanceId: ProviderInstanceId, provider: ServerProvider) => ReactNode;
 }) {
+  const canManageProviders = useEnvironmentScope(environmentId, AuthProvidersManageScope);
   const settings = useEnvironmentSettings(environmentId);
   const providers = useAtomValue(serverEnvironment.providersValueAtom(environmentId));
   const update = useAtomCommand(serverEnvironment.updateSettings, "Add ChatGPT account");
@@ -42,14 +48,13 @@ export function AddCodexAccountDialog({
   const connected = usesChatGptSharing(provider);
   const closeAfterConnection = useEffectEvent(onClose);
   useEffect(() => {
-    // The destination snapshot confirms remote transfer as well as local sign-in.
     if (connected) closeAfterConnection();
   }, [connected]);
 
   const createAccount = async () => {
-    if (pending || !name.trim()) return;
+    if (pending || !name.trim() || !readEnvironmentScope(environmentId, AuthProvidersManageScope))
+      return;
     setPending(true);
-    // The ID is routing identity; the name is editable and need not be unique.
     const id = ProviderInstanceId.make(`codex_${randomUUID()}`);
     const result = await update({
       environmentId,
@@ -58,7 +63,7 @@ export function AddCodexAccountDialog({
           providerInstances: {
             ...settings.providerInstances,
             [id]: {
-              driver: ProviderDriverKind.make("codex"),
+              driver: CODEX_DRIVER_KIND,
               displayName,
               enabled: true,
               config: { enabled: true, setupMode: "managed" },
@@ -100,6 +105,7 @@ export function AddCodexAccountDialog({
           ) : (
             <form
               id="add-codex-account"
+              className="grid gap-3"
               onSubmit={(event) => {
                 event.preventDefault();
                 void createAccount();
@@ -118,6 +124,7 @@ export function AddCodexAccountDialog({
                   />
                 }
               />
+              <MultipleAccountsNote environmentId={environmentId} driver={CODEX_DRIVER_KIND} />
             </form>
           )}
         </WizardPanel>
@@ -131,7 +138,11 @@ export function AddCodexAccountDialog({
               <Button variant="outline" disabled={pending} onClick={onClose}>
                 Cancel
               </Button>
-              <Button type="submit" form="add-codex-account" disabled={pending || !name.trim()}>
+              <Button
+                type="submit"
+                form="add-codex-account"
+                disabled={pending || !name.trim() || !canManageProviders}
+              >
                 {pending ? "Adding account…" : "Continue"}
               </Button>
             </>

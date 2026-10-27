@@ -7,6 +7,7 @@ import android.text.Editable
 import android.text.InputType
 import android.text.TextWatcher
 import android.view.KeyEvent
+import android.view.View
 import android.view.ViewGroup
 import android.view.inputmethod.EditorInfo
 import android.view.inputmethod.InputMethodManager
@@ -20,7 +21,12 @@ import kotlin.math.max
 class T3TerminalView(context: Context, appContext: AppContext) : ExpoView(context, appContext) {
   private val container = FrameLayout(context)
   private val terminalCanvas = TerminalCanvasView(context)
-  private val inputView = EditText(context)
+
+  // Newer Android can request autofill even with importantForAutofill=no.
+  // Reporting no autofill type keeps terminal input out of credential autofill.
+  private val inputView = object : EditText(context) {
+    override fun getAutofillType(): Int = View.AUTOFILL_TYPE_NONE
+  }
   private val onInput by EventDispatcher()
   private val onResize by EventDispatcher()
   private val onCapture by EventDispatcher()
@@ -49,6 +55,7 @@ class T3TerminalView(context: Context, appContext: AppContext) : ExpoView(contex
     }
   private var terminalHandle = 0L
   private var fedBuffer = ""
+  private var streamedOutput: TerminalOutputBuffer? = null
   private var cols = 0
   private var rows = 0
   private var clearingInput = false
@@ -97,6 +104,16 @@ class T3TerminalView(context: Context, appContext: AppContext) : ExpoView(contex
       field = value
       if (value != previous && value > 0) {
         requestKeyboardFocus()
+      }
+    }
+
+  var readOnly: Boolean = false
+    set(value) {
+      field = value
+      inputView.isEnabled = !value
+      if (value) {
+        inputView.clearFocus()
+        hideKeyboard()
       }
     }
 
@@ -238,6 +255,7 @@ class T3TerminalView(context: Context, appContext: AppContext) : ExpoView(contex
       InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS
     inputView.setPadding(0, 0, 0, 0)
     inputView.setOnEditorActionListener { _, actionId, event ->
+      if (readOnly) return@setOnEditorActionListener true
       val isKeyUp = event?.action == KeyEvent.ACTION_UP
       val isImeSend = actionId == EditorInfo.IME_ACTION_SEND && !isKeyUp
       val isHardwareEnter = event?.keyCode == KeyEvent.KEYCODE_ENTER &&
@@ -252,13 +270,13 @@ class T3TerminalView(context: Context, appContext: AppContext) : ExpoView(contex
       }
     }
     inputView.setOnKeyListener { _, keyCode, event ->
+      if (readOnly) return@setOnKeyListener true
       if (event.action != KeyEvent.ACTION_DOWN) return@setOnKeyListener false
       when {
         keyCode == KeyEvent.KEYCODE_DEL -> {
           onInput(mapOf("data" to "\u007F"))
           true
         }
-        // Hardware keyboard Ctrl+A..Z -> control bytes 0x01..0x1A (Ctrl+C, Ctrl+Z, ...).
         event.isCtrlPressed && keyCode in KeyEvent.KEYCODE_A..KeyEvent.KEYCODE_Z -> {
           onInput(
             mapOf("data" to (keyCode - KeyEvent.KEYCODE_A + 1).toChar().toString()),
@@ -273,11 +291,11 @@ class T3TerminalView(context: Context, appContext: AppContext) : ExpoView(contex
         override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) = Unit
 
         override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {
+          if (readOnly) return
           if (clearingInput || s == null || count <= 0) return
           val end = (start + count).coerceAtMost(s.length)
-          if (start >= end) return
-          val insertedText = s.subSequence(start, end).toString()
-          if (insertedText.isNotEmpty()) {
+          if (start < end) {
+            val insertedText = s.subSequence(start, end).toString()
             onInput(mapOf("data" to insertedText))
           }
         }
@@ -344,6 +362,7 @@ class T3TerminalView(context: Context, appContext: AppContext) : ExpoView(contex
       paletteColors,
     )
     fedBuffer = ""
+    streamedOutput?.let { output -> feedOutput(output.data) }
   }
 
   private fun recreateTerminal() {
@@ -363,7 +382,7 @@ class T3TerminalView(context: Context, appContext: AppContext) : ExpoView(contex
   }
 
   private fun feedPendingBuffer() {
-    if (terminalHandle == 0L || initialBuffer == fedBuffer) return
+    if (streamedOutput != null || terminalHandle == 0L || initialBuffer == fedBuffer) return
     if (!initialBuffer.startsWith(fedBuffer)) {
       recreateTerminal()
       if (terminalHandle == 0L) return
@@ -382,6 +401,29 @@ class T3TerminalView(context: Context, appContext: AppContext) : ExpoView(contex
     renderSnapshot()
   }
 
+  fun writeOutput(data: String, reset: Boolean) {
+    if (isCleanedUp) return
+    val output = streamedOutput ?: TerminalOutputBuffer()
+    val bytes = data.toByteArray(Charsets.UTF_8)
+    output.write(bytes, reset)
+    streamedOutput = output
+    if (reset) {
+      recreateTerminal()
+    } else if (terminalHandle != 0L) {
+      feedOutput(bytes)
+      renderSnapshot()
+    }
+  }
+
+  private fun feedOutput(data: ByteArray) {
+    if (terminalHandle == 0L || data.isEmpty()) return
+    emitResponse(GhosttyBridge.nativeFeed(terminalHandle, data))
+    if (terminalCanvas.hasActiveSelection()) {
+      GhosttyBridge.nativeClearSelection(terminalHandle)
+      terminalCanvas.resetSelectionState()
+    }
+  }
+
   private fun renderSnapshot() {
     if (terminalHandle == 0L) return
     TerminalFrame.decode(
@@ -390,12 +432,13 @@ class T3TerminalView(context: Context, appContext: AppContext) : ExpoView(contex
   }
 
   private fun emitResponse(response: ByteArray) {
-    if (response.isNotEmpty()) {
+    if (!readOnly && response.isNotEmpty()) {
       onInput(mapOf("data" to String(response, Charsets.UTF_8)))
     }
   }
 
   private fun requestKeyboardFocus() {
+    if (readOnly) return
     inputView.requestFocus()
     val inputMethodManager = context.getSystemService(
       Context.INPUT_METHOD_SERVICE
