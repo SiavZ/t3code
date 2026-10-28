@@ -1,9 +1,9 @@
 {
   "name": "t3-code-source-dev",
   "displayName": "T3 Code Source Dev",
-  "version": "0.0.5",
+  "version": "0.0.6",
   "private": true,
-  "description": "Open the T3 Code source checkout in VS Code without a terminal.",
+  "description": "Open the persistent T3 Code service on the Raspberry Pi.",
   "license": "MIT",
   "repository": {
     "type": "git",
@@ -37,12 +37,12 @@
     "commands": [
       {
         "command": "t3CodeSource.open",
-        "title": "T3 Code: Open from Source",
+        "title": "T3 Code: Open Raspberry Pi",
         "icon": "$(browser)"
       },
       {
         "command": "t3CodeSource.chooseCheckout",
-        "title": "T3 Code: Choose Source Checkout",
+        "title": "T3 Code: Open Raspberry Pi (Legacy Shortcut)",
         "icon": "$(folder-opened)"
       },
       {
@@ -58,6 +58,11 @@
           "type": "string",
           "default": "node",
           "description": "Node.js 24 executable used to start this checkout's dev runner."
+        },
+        "t3CodeSource.remoteUrl": {
+          "type": "string",
+          "default": "http://192.168.50.13:3773",
+          "description": "Pi service address. This installation always opens the persistent Pi service."
         }
       }
     }
@@ -69,7 +74,7 @@
     "onView:t3CodeSource.actions"
   ],
   "extensionKind": [
-    "workspace"
+    "ui"
   ],
   "engines": {
     "vscode": "^1.113.0"
