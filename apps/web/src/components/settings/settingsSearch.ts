@@ -785,7 +785,7 @@ export const SETTINGS_SEARCH_ITEMS = [
   {
     id: "agent-memory-access",
     title: "Agent memory",
-    to: "/settings/integrations",
+    to: "/settings/browser",
     scope: "project-defaults",
     searchTerms: ["remember recall forget notes knowledge stored delete project override"],
   },
