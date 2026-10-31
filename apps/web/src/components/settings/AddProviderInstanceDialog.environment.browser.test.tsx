@@ -288,6 +288,42 @@ describe("AddProviderInstanceDialog environment routing", () => {
     );
   });
 
+  it("clears discarded invalid environment drafts when switching drivers", async () => {
+    setup();
+    await using _screen = await prepareCodexInstance();
+    await click("Add variable");
+    await type('input[aria-label="Environment variable name 1"]', "INVALID-NAME");
+    await click("Add instance");
+    expect(settingsHooks.mutate).not.toHaveBeenCalled();
+
+    await act(async () =>
+      document.querySelector<HTMLButtonElement>('[aria-label^="Provider, step 1"]')!.click(),
+    );
+    await click("Show more");
+    await act(async () => radio("fx")!.click());
+    await act(async () =>
+      document.querySelector<HTMLButtonElement>('[aria-label^="Identity, step 2"]')!.click(),
+    );
+    await act(async () =>
+      document.querySelector<HTMLButtonElement>('[aria-label^="Provider, step 1"]')!.click(),
+    );
+    await act(async () => radio("Codex")!.click());
+    await act(async () =>
+      document.querySelector<HTMLButtonElement>('[aria-label^="Identity, step 2"]')!.click(),
+    );
+    await act(async () =>
+      document.querySelector<HTMLButtonElement>('[aria-label^="Config, step 3"]')!.click(),
+    );
+    await click("Add instance");
+
+    expect(settingsHooks.mutate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        instanceId: "codex_work",
+        instance: expect.objectContaining({ driver: "codex" }),
+      }),
+    );
+  });
+
   it("includes the explicitly added default accent color when creating a provider", async () => {
     setup();
     await using _screen = await render(dialog());
