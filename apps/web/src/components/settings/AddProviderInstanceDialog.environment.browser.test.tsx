@@ -170,6 +170,59 @@ describe("AddProviderInstanceDialog environment routing", () => {
     });
   });
 
+  it("creates a provider instance with custom endpoint variables", async () => {
+    setup();
+    await using _screen = await render(dialog());
+    await click("Configure manually");
+    await type("#add-provider-label", "Gateway");
+    await click("Next");
+    await click("Add variable");
+    await type('input[aria-label="Environment variable name 1"]', "OPENAI_BASE_URL");
+    await type('input[aria-label="Environment variable value 1"]', "https://gateway.example/v1");
+    await click("Add variable");
+    await type('input[aria-label="Environment variable name 2"]', "OPENAI_API_KEY");
+    await type('input[aria-label="Environment variable value 2"]', "gateway-secret");
+    await click("Add instance");
+
+    expect(settingsHooks.mutate).toHaveBeenCalledWith({
+      operation: "create",
+      instanceId: "codex_gateway",
+      instance: {
+        driver: "codex",
+        enabled: true,
+        displayName: "Gateway",
+        config: { setupMode: "existing" },
+        environment: [
+          { name: "OPENAI_BASE_URL", value: "https://gateway.example/v1", sensitive: true },
+          { name: "OPENAI_API_KEY", value: "gateway-secret", sensitive: true },
+        ],
+      },
+    });
+  });
+
+  it("does not carry endpoint credentials across driver changes", async () => {
+    setup();
+    await using _screen = await render(dialog());
+    await click("Configure manually");
+    await click("Next");
+    await click("Add variable");
+    await type('input[aria-label="Environment variable name 1"]', "OPENAI_API_KEY");
+    await type('input[aria-label="Environment variable value 1"]', "codex-secret");
+    await click("Provider");
+    await click("Show more");
+    await click("Use Kilo Code");
+    await type("#add-provider-label", "Kilo Custom");
+    await click("Continue to sign-in");
+
+    expect(settingsHooks.mutate).toHaveBeenCalledWith({
+      operation: "create",
+      instanceId: "acpRegistry_kilo_custom",
+      instance: expect.not.objectContaining({
+        environment: expect.arrayContaining([expect.objectContaining({ name: "OPENAI_API_KEY" })]),
+      }),
+    });
+  });
+
   it("includes the explicitly added default accent color when creating a provider", async () => {
     setup();
     await using _screen = await render(dialog());
