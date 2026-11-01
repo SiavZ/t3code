@@ -373,6 +373,28 @@ export function AddProviderInstanceDialog({
     setHasAttemptedSubmit(false);
   };
 
+  const handleJcodeConfiguration = () => {
+    setDriver(ACP_REGISTRY_DRIVER_KIND);
+    setSelectedAcp(null);
+    setIsManualAcpConfiguration(true);
+    setConfigByDriver((existing) => ({
+      ...existing,
+      [ACP_REGISTRY_DRIVER_KIND]: {
+        source: "local",
+        commandPath: "jcode",
+        commandArgs: ["acp", "--quiet"],
+      },
+    }));
+    setIdentityByDriver((existing) =>
+      updateProviderIdentityDraft(existing, ACP_REGISTRY_DRIVER_KIND, {
+        label: "Jcode",
+        instanceIdOverride: null,
+      }),
+    );
+    setLocalEnvironment([]);
+    setHasAttemptedSubmit(false);
+  };
+
   const handleSave = async () => {
     if (!readEnvironmentScope(environmentId, AuthProvidersManageScope)) return;
     if (isSaving || createdInstanceId) return;
@@ -571,6 +593,7 @@ export function AddProviderInstanceDialog({
                             onPrepared={handleAcpPrepared}
                             onManualConfiguration={handleManualAcpConfiguration}
                             onLocalConfiguration={handleLocalAcpConfiguration}
+                            onJcodeConfiguration={handleJcodeConfiguration}
                           />
                           {isAcpRegistry && hasAttemptedSubmit && acpSelectionError ? (
                             <p className="mt-2 text-2xs text-destructive">{acpSelectionError}</p>

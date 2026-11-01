@@ -39,6 +39,14 @@ credentials and skills remain managed by the installed agent or its wrapper. Mod
 options come from ACP, including model IDs that contain JSON. T3 Code launches the executable directly
 without expanding shell expressions.
 
+### Jcode
+
+Install Jcode on the machine hosting T3 Code and make `jcode` available on that machine's `PATH`.
+In the ACP Registry step, select **Use Jcode**, confirm the instance, then add it. T3 Code runs
+`jcode acp --quiet`; Jcode uses its own daemon and account configuration. Jcode's ACP runtime
+currently does not use MCP servers supplied by ACP hosts, so Jcode sessions cannot call T3 Code's
+MCP tools.
+
 ## Where agents run
 
 Registry agents always run on the machine that hosts your T3 Code server. That stays true when you
