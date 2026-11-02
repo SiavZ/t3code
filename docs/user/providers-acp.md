@@ -43,9 +43,11 @@ without expanding shell expressions.
 
 Install Jcode on the machine hosting T3 Code and make `jcode` available on that machine's `PATH`.
 In the ACP Registry step, select **Use Jcode**, confirm the instance, then add it. T3 Code runs
-`jcode acp --quiet`; Jcode uses its own daemon and account configuration. Jcode's ACP runtime
-currently does not use MCP servers supplied by ACP hosts, so Jcode sessions cannot call T3 Code's
-MCP tools.
+`jcode acp --quiet`; Jcode uses its own daemon and account configuration. With a route-aware
+Jcode runtime, model choices include the provider and API method. Select the matching entry to
+choose which provider runs that model. Update Jcode on the server machine if these choices are
+missing. Jcode's ACP runtime currently does not use MCP servers supplied by ACP hosts, so Jcode
+sessions cannot call T3 Code's MCP tools.
 
 ## Where agents run
 
