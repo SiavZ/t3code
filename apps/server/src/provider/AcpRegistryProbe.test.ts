@@ -169,6 +169,8 @@ describe("ACP Registry probe", () => {
   it("preserves grouped model values and advertises reasoning choices", () => {
     const codexModel = '["codex","gpt-6.1-sol"]';
     const goModel = '["opencode-go","deepseek-v4.1-flash"]';
+    const apiModel = "openai-api:gpt-6.1-sol";
+    const subscriptionModel = "openai:gpt-6.1-sol";
     const result = acpRegistryProbeResult(instanceId, {
       sessionId: "probe-session",
       initializeResult: { protocolVersion: 1 },
@@ -185,7 +187,11 @@ describe("ACP Registry probe", () => {
               {
                 groupId: "codex",
                 name: "Codex",
-                options: [{ value: codexModel, name: "GPT-6.1 Sol" }],
+                options: [
+                  { value: codexModel, name: "GPT-6.1 Sol" },
+                  { value: apiModel, name: "GPT-6.1 Sol" },
+                  { value: subscriptionModel, name: "GPT-6.1 Sol" },
+                ],
               },
               {
                 groupId: "opencode-go",
@@ -218,6 +224,8 @@ describe("ACP Registry probe", () => {
 
     expect(result.models).toEqual([
       { id: codexModel, name: "GPT-6.1 Sol", description: null },
+      { id: apiModel, name: "GPT-6.1 Sol", description: null },
+      { id: subscriptionModel, name: "GPT-6.1 Sol", description: null },
       { id: goModel, name: "DeepSeek V4.1 Flash", description: null },
     ]);
     expect(result.currentModelId).toBe(goModel);
@@ -236,10 +244,15 @@ describe("ACP Registry probe", () => {
     ]);
   });
 
-  it.each(["config option", "session model state"] as const)(
-    "retains the current model beyond the catalog cap from %s",
-    (source) => {
-      const models = Array.from({ length: 257 }, (_, index) => ({
+  it.each(
+    (["config option", "session model state"] as const).flatMap((source) =>
+      [730, 4_097].map((count) => ({ source, count })),
+    ),
+  )(
+    "retains advertised models and the current model from $source with $count models",
+    ({ source, count }) => {
+      const currentModelId = `model-${count - 1}`;
+      const models = Array.from({ length: count }, (_, index) => ({
         modelId: `model-${index}`,
         name: `Model ${index}`,
       }));
@@ -256,20 +269,20 @@ describe("ACP Registry probe", () => {
                     name: "Model",
                     category: "model",
                     type: "select",
-                    currentValue: "model-256",
+                    currentValue: currentModelId,
                     options: models.map(({ modelId, name }) => ({ value: modelId, name })),
                   },
                 ],
               }
-            : { models: { currentModelId: "model-256", availableModels: models } }),
+            : { models: { currentModelId, availableModels: models } }),
         },
         modelConfigId: source === "config option" ? "model" : undefined,
       } satisfies AcpSessionRuntime.AcpSessionRuntimeStartResult);
 
-      expect(result.models).toHaveLength(256);
+      expect(result.models).toHaveLength(Math.min(count, 4_096));
       expect(result.models[0]?.id).toBe("model-0");
-      expect(result.models.at(-1)?.id).toBe("model-256");
-      expect(result.currentModelId).toBe("model-256");
+      expect(result.models.at(-1)?.id).toBe(currentModelId);
+      expect(result.currentModelId).toBe(currentModelId);
     },
   );
 
