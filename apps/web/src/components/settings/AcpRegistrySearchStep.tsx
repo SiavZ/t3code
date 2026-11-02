@@ -127,7 +127,6 @@ interface AcpRegistrySearchStepProps {
   readonly onPrepared: (agent: AcpRegistrySearchAgent) => void;
   readonly onManualConfiguration: () => void;
   readonly onLocalConfiguration?: () => void;
-  readonly onJcodeConfiguration?: () => void;
 }
 
 export function AcpRegistrySearchStep({
@@ -137,7 +136,6 @@ export function AcpRegistrySearchStep({
   onPrepared,
   onManualConfiguration,
   onLocalConfiguration,
-  onJcodeConfiguration,
 }: AcpRegistrySearchStepProps) {
   const canManageProviders = useEnvironmentScope(environmentId, AuthProvidersManageScope);
   const { query, search, preparingId, prepareError } = registry;
@@ -196,17 +194,6 @@ export function AcpRegistrySearchStep({
             variant="outline"
           >
             Local ACP command
-          </Button>
-        ) : null}
-        {onJcodeConfiguration ? (
-          <Button
-            disabled={preparingId !== null}
-            onClick={onJcodeConfiguration}
-            size="sm"
-            type="button"
-            variant="outline"
-          >
-            Use Jcode
           </Button>
         ) : null}
       </form>

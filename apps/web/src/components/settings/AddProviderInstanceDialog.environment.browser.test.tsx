@@ -56,7 +56,6 @@ vi.mock(import("./AcpRegistrySearchStep"), async (original) => ({
     onPrepared: (agent: AcpRegistrySearchAgent) => void;
     onManualConfiguration: () => void;
     onLocalConfiguration: () => void;
-    onJcodeConfiguration: () => void;
   }) => (
     <div>
       <button type="button" onClick={() => props.onPrepared(preparedAgent)}>
@@ -67,9 +66,6 @@ vi.mock(import("./AcpRegistrySearchStep"), async (original) => ({
       </button>
       <button type="button" onClick={props.onLocalConfiguration}>
         Use local command
-      </button>
-      <button type="button" onClick={props.onJcodeConfiguration}>
-        Use Jcode
       </button>
     </div>
   )) as never,
@@ -351,7 +347,6 @@ describe("AddProviderInstanceDialog environment routing", () => {
   it("adds Jcode as a local ACP instance using the Jcode daemon adapter", async () => {
     setup();
     await using _screen = await render(dialog());
-    await click("Show more");
     await click("Use Jcode");
     await click("Next");
     await click("Add instance");
