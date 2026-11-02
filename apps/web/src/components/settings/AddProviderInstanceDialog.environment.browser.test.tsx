@@ -347,6 +347,7 @@ describe("AddProviderInstanceDialog environment routing", () => {
   it("adds Jcode as a local ACP instance using the Jcode daemon adapter", async () => {
     setup();
     await using _screen = await render(dialog());
+    await click("Show more");
     await click("Use Jcode");
     await click("Next");
     await click("Add instance");

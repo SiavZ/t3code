@@ -510,18 +510,6 @@ export function AddProviderInstanceDialog({
                   onValueChange={selectDriver}
                   aria-labelledby="add-instance-driver-label"
                 />
-                <div className="flex items-center gap-2 pt-1">
-                  <Button
-                    disabled={isPreparingRegistryAgent}
-                    onClick={handleJcodeConfiguration}
-                    size="sm"
-                    type="button"
-                    variant="outline"
-                  >
-                    Use Jcode
-                  </Button>
-                  <span className="text-xs text-muted-foreground">Local ACP preset</span>
-                </div>
                 <MultipleAccountsNote environmentId={environmentId} driver={driver} />
               </div>
 
@@ -598,6 +586,18 @@ export function AddProviderInstanceDialog({
                         </div>
                       ) : (
                         <>
+                          <div className="flex flex-wrap items-center gap-2">
+                            <Button
+                              disabled={isPreparingRegistryAgent}
+                              onClick={handleJcodeConfiguration}
+                              size="sm"
+                              type="button"
+                              variant="outline"
+                            >
+                              Use Jcode
+                            </Button>
+                            <span className="text-xs text-muted-foreground">Jcode ACP preset</span>
+                          </div>
                           <AcpRegistrySearchStep
                             environmentId={environmentId}
                             registry={registry}
