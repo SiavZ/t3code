@@ -763,6 +763,7 @@ export function AddProviderInstanceDialog({
                   ) : null}
                   {driverLocks?.wholeEnvironment ? null : (
                     <ProviderEnvironmentSection
+                      key={driver}
                       environment={environmentByDriver[driver] ?? []}
                       onChange={setProviderEnvironment}
                       onInvalidDraft={(invalid) =>

@@ -233,6 +233,61 @@ describe("AddProviderInstanceDialog environment routing", () => {
     });
   });
 
+  it.each(["INVALID-NAME", "1INVALID", "INVALID NAME", ""])(
+    "blocks creation with invalid variable name %j until corrected",
+    async (invalidName) => {
+      setup();
+      await using _screen = await prepareCodexInstance();
+      await click("Add variable");
+      await type('input[aria-label="Environment variable name 1"]', "OPENAI_API_KEY");
+      await type('input[aria-label="Environment variable value 1"]', "secret");
+      await type('input[aria-label="Environment variable name 1"]', invalidName);
+      await click("Add instance");
+      expect(settingsHooks.mutate).not.toHaveBeenCalled();
+      expect(document.body.textContent).toContain("Fix or remove the invalid variable name");
+
+      await type('input[aria-label="Environment variable name 1"]', "CORRECTED_KEY");
+      await click("Add instance");
+      expect(settingsHooks.mutate).toHaveBeenCalledWith(
+        expect.objectContaining({
+          instance: expect.objectContaining({
+            environment: [
+              { name: "CORRECTED_KEY", value: "secret", sensitive: true, valueRedacted: false },
+            ],
+          }),
+        }),
+      );
+    },
+  );
+
+  it("does not retain editor rows or credentials when switching native drivers", async () => {
+    setup();
+    await using _screen = await prepareCodexInstance();
+    await click("Add variable");
+    await type('input[aria-label="Environment variable name 1"]', "OPENAI_API_KEY");
+    await type('input[aria-label="Environment variable value 1"]', "codex-secret");
+    await click("Provider");
+    await click("Show more");
+    await act(async () => radio("fx")!.click());
+    await click("Next");
+    await click("Next");
+    expect(document.querySelector('input[aria-label="Environment variable name 1"]')).toBeNull();
+    await click("Add variable");
+    await type('input[aria-label="Environment variable name 1"]', "FX_KEY");
+    await type('input[aria-label="Environment variable value 1"]', "fx-secret");
+    await click("Add instance");
+    expect(settingsHooks.mutate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        instance: expect.objectContaining({
+          driver: "fx",
+          environment: [
+            { name: "FX_KEY", value: "fx-secret", sensitive: true, valueRedacted: false },
+          ],
+        }),
+      }),
+    );
+  });
+
   it("clears discarded invalid environment drafts when switching drivers", async () => {
     setup();
     await using _screen = await prepareCodexInstance();
