@@ -62,6 +62,7 @@ const PAGE_PROJECT_KEYS: Record<SettingsPage, readonly ProjectScopedServerSettin
     "defaultRuntimeMode",
     "responseStreamingMode",
     "enableAgentBrowserAccess",
+    "enableAgentMemoryAccess",
     "sidebarAutoSettleOnMerge",
     "sidebarAutoSettleAfterDays",
   ],
@@ -412,6 +413,15 @@ function ServerSettingsDetail(props: { readonly page: SettingsPage }) {
                     />
                   </SettingsSection>
                   <AutoSettleSettingsRows write={write} pending={pendingWrites > 0} />
+                  <SettingsSection title="Project memory">
+                    <SettingsSwitchRow
+                      label="Agent memory"
+                      subtitle="Let agents remember project notes across threads and providers. Applies when the agent session next starts. Review and delete notes in web or desktop settings."
+                      value={uniform("enableAgentMemoryAccess")}
+                      disabled={disabledFor("enableAgentMemoryAccess")}
+                      onValueChange={(value) => write({ enableAgentMemoryAccess: value })}
+                    />
+                  </SettingsSection>
                 </>
               ) : null}
 

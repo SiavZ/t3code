@@ -19,19 +19,20 @@ import * as Schema from "effect/Schema";
 import * as SqlClient from "effect/sql/SqlClient";
 import * as SqlSchema from "effect/sql/SqlSchema";
 
-/** Entries a project may hold. Remember refuses past it, so the store and every scan stay bounded. */
 export const MAX_MEMORY_ENTRIES_PER_PROJECT = 500;
 const DEFAULT_QUERY_LIMIT = 8;
 
-/** Who is asking: the project comes from the caller's credential or route, never from tool input. */
+// Authority comes from the authenticated caller's thread or the user's project route, never tool input.
 export interface MemoryAuthority {
   readonly projectId: ProjectId;
-  readonly threadId?: ThreadId | undefined;
+  readonly threadId?: ThreadId;
 }
 
 export class MemoryProjectFullError extends Schema.TaggedError<MemoryProjectFullError>()(
   "MemoryProjectFullError",
-  { limit: Schema.Int },
+  {
+    limit: Schema.Int,
+  },
 ) {
   override get message(): string {
     return `This project already holds ${this.limit} memory entries. Forget outdated ones first.`;
@@ -45,38 +46,34 @@ export class MemoryService extends Context.Service<
       input: MemoryRememberInput,
       authority: MemoryAuthority,
     ) => Effect.Effect<MemoryEntry, MemoryProjectFullError | MemoryStorageError>;
-    /** Entries matching any query term, best match first, within the result character budget. */
     readonly search: (
       input: MemoryQueryInput,
       authority: MemoryAuthority,
     ) => Effect.Effect<MemoryQueryResult, MemoryStorageError>;
-    /** Whether an entry was deleted. Another project's id deletes nothing, so ids leak nothing. */
     readonly forget: (
       input: MemoryForgetInput,
       authority: MemoryAuthority,
     ) => Effect.Effect<boolean, MemoryStorageError>;
-    /** Newest first, for the settings list. */
     readonly list: (
       authority: MemoryAuthority,
     ) => Effect.Effect<MemoryQueryResult, MemoryStorageError>;
   }
 >()("t3/memory/MemoryService") {}
 
-/**
- * Lowercased words of 1 to 64 letters, digits, `_` or `-`, at most 32 per query. One-character
- * terms stay searchable so names like `R` or `C` can be recalled.
- */
-export const queryTerms = (text: string): ReadonlyArray<string> =>
+const queryTerms = (text: string): ReadonlyArray<string> =>
   [...new Set(text.toLocaleLowerCase().match(/[\p{L}\p{N}_-]{1,64}/gu) ?? [])].slice(0, 32);
 
-/**
- * Longer terms match anywhere in the content. A one-character term matches only a whole word,
- * otherwise `r` would match nearly every note.
- */
-const matchesTerm = (content: string, words: ReadonlySet<string>, term: string) =>
-  term.length === 1 ? words.has(term) : content.includes(term);
-
-const ProjectRequest = Schema.Struct({ projectId: Schema.String });
+const withinBudget = (entries: ReadonlyArray<MemoryEntry>, limit: number) => {
+  const kept: Array<MemoryEntry> = [];
+  let characters = 0;
+  for (const entry of entries) {
+    if (kept.length === limit || characters + entry.content.length > MEMORY_RESULT_CHARACTER_BUDGET)
+      break;
+    kept.push(entry);
+    characters += entry.content.length;
+  }
+  return { entries: kept, truncated: kept.length < entries.length };
+};
 
 const make = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
@@ -106,39 +103,20 @@ const make = Effect.gen(function* () {
     Effect.mapError(storageError),
   );
 
-  // Every query reads the whole project, which the per-project cap keeps small.
+  // The project cap bounds the full scan used for lexical ranking.
   const projectRows = SqlSchema.findAll({
-    Request: ProjectRequest,
+    Request: Schema.Struct({ projectId: Schema.String }),
     Result: MemoryEntry,
     execute: ({ projectId }) => sql`
-      SELECT
-        id AS "id",
-        project_id AS "projectId",
-        category AS "category",
-        content AS "content",
-        source_thread_id AS "sourceThreadId",
-        created_at AS "createdAt"
-      FROM agent_memory_entries
-      WHERE project_id = ${projectId}
-      ORDER BY created_at DESC, id
-      LIMIT ${MAX_MEMORY_ENTRIES_PER_PROJECT + 1}
+      SELECT id, project_id AS "projectId", category, content,
+        source_thread_id AS "sourceThreadId", created_at AS "createdAt"
+      FROM agent_memory_entries WHERE project_id = ${projectId}
+      ORDER BY created_at DESC, id LIMIT ${MAX_MEMORY_ENTRIES_PER_PROJECT + 1}
     `,
   });
-  const readProject = (projectId: ProjectId) =>
-    projectRows({ projectId }).pipe(Effect.mapError(storageError));
-
-  /** Keep entries in order until the content budget or the limit runs out. */
-  const withinBudget = (entries: ReadonlyArray<MemoryEntry>, limit: number) => {
-    const kept: Array<MemoryEntry> = [];
-    let characters = 0;
-    for (const entry of entries) {
-      if (kept.length === limit) break;
-      if (characters + entry.content.length > MEMORY_RESULT_CHARACTER_BUDGET) break;
-      kept.push(entry);
-      characters += entry.content.length;
-    }
-    return { entries: kept, truncated: kept.length < entries.length };
-  };
+  const readProject = Effect.fn("MemoryService.readProject")(function (projectId: ProjectId) {
+    return projectRows({ projectId }).pipe(Effect.mapError(storageError));
+  });
 
   const remember = Effect.fn("MemoryService.remember")(function* (
     input: MemoryRememberInput,
@@ -155,19 +133,16 @@ const make = Effect.gen(function* () {
     yield* sql
       .withTransaction(
         Effect.gen(function* () {
-          const [row] = yield* sql<{ readonly count: number }>`
-            SELECT COUNT(*) AS "count" FROM agent_memory_entries
-            WHERE project_id = ${authority.projectId}
-          `;
+          const [row] = yield* sql<{
+            readonly count: number;
+          }>`SELECT COUNT(*) AS "count" FROM agent_memory_entries WHERE project_id = ${authority.projectId}`;
           if ((row?.count ?? 0) >= MAX_MEMORY_ENTRIES_PER_PROJECT) {
             return yield* new MemoryProjectFullError({ limit: MAX_MEMORY_ENTRIES_PER_PROJECT });
           }
           yield* sql`
-            INSERT INTO agent_memory_entries
-              (id, project_id, category, content, source_thread_id, created_at)
-            VALUES (${entry.id}, ${entry.projectId}, ${entry.category}, ${entry.content},
-              ${entry.sourceThreadId}, ${entry.createdAt})
-          `;
+        INSERT INTO agent_memory_entries (id, project_id, category, content, source_thread_id, created_at)
+        VALUES (${entry.id}, ${entry.projectId}, ${entry.category}, ${entry.content}, ${entry.sourceThreadId}, ${entry.createdAt})
+      `;
         }),
       )
       .pipe(Effect.catchTags({ SqlError: (cause) => Effect.fail(storageError(cause)) }));
@@ -185,10 +160,15 @@ const make = Effect.gen(function* () {
       .map((entry) => {
         const content = entry.content.toLocaleLowerCase();
         const words = new Set(content.match(/[\p{L}\p{N}_-]+/gu) ?? []);
-        return { entry, score: terms.filter((term) => matchesTerm(content, words, term)).length };
+        // Single-letter names must match whole words rather than most notes.
+        return {
+          entry,
+          score: terms.filter((term) =>
+            term.length === 1 ? words.has(term) : content.includes(term),
+          ).length,
+        };
       })
       .filter(({ score }) => score > 0)
-      // Stable sort keeps newest-first among equal scores.
       .sort((a, b) => b.score - a.score)
       .map(({ entry }) => entry);
     return withinBudget(ranked, input.limit ?? DEFAULT_QUERY_LIMIT);
@@ -199,9 +179,7 @@ const make = Effect.gen(function* () {
     authority: MemoryAuthority,
   ) {
     const deleted = yield* sql<{ readonly id: string }>`
-      DELETE FROM agent_memory_entries
-      WHERE id = ${input.id} AND project_id = ${authority.projectId}
-      RETURNING id AS "id"
+      DELETE FROM agent_memory_entries WHERE id = ${input.id} AND project_id = ${authority.projectId} RETURNING id
     `.pipe(Effect.mapError(storageError));
     return deleted.length > 0;
   });
@@ -213,7 +191,6 @@ const make = Effect.gen(function* () {
       truncated: rows.length > MAX_MEMORY_ENTRIES_PER_PROJECT,
     };
   });
-
   return MemoryService.of({ remember, search, forget, list });
 });
 

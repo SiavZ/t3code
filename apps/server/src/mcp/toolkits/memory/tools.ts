@@ -6,32 +6,24 @@ import {
   MemoryQueryResult,
   MemoryRememberInput,
   MemoryStorageError,
+  OrchestratorMcpFailure,
 } from "@t3tools/contracts";
 import * as Schema from "effect/Schema";
 import { Tool, Toolkit } from "effect/ai";
 
 import * as MemoryService from "../../../memory/MemoryService.ts";
-import * as Orchestrator from "../../../orchestration-v2/Orchestrator.ts";
+import * as ThreadManagement from "../../../orchestration-v2/ThreadManagementService.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
 
 const dependencies = [
   McpInvocationContext.McpInvocationContext,
   MemoryService.MemoryService,
-  Orchestrator.OrchestratorV2,
+  ThreadManagement.ThreadManagementService,
 ];
-
-export class MemoryThreadNotFoundError extends Schema.TaggedError<MemoryThreadNotFoundError>()(
-  "MemoryThreadNotFoundError",
-  { threadId: Schema.String },
-) {
-  override get message(): string {
-    return `Thread ${this.threadId} was not found, so its project memory cannot be reached.`;
-  }
-}
 
 export const MemoryToolError = Schema.Union([
   McpCapabilityUnavailableError,
-  MemoryThreadNotFoundError,
+  OrchestratorMcpFailure,
   MemoryService.MemoryProjectFullError,
   MemoryStorageError,
 ]);
@@ -75,7 +67,7 @@ const ForgetTool = Tool.make("memory_forget", {
   .annotate(Tool.Title, "Forget a project note")
   .annotate(Tool.Readonly, false)
   .annotate(Tool.Destructive, true)
-  .annotate(Tool.Idempotent, false)
+  .annotate(Tool.Idempotent, true)
   .annotate(Tool.OpenWorld, false);
 
 export const MemoryToolkit = Toolkit.make(RememberTool, RecallTool, ForgetTool);

@@ -282,6 +282,7 @@ export function AddProviderInstanceDialog({
     setEnvironmentDraftInvalidByDriver((existing) => ({ ...existing, [driver]: false }));
   };
   const selectDriver = (value: string) => {
+    setEnvironmentDraftInvalidByDriver((existing) => ({ ...existing, [driver]: false }));
     setDriver(ProviderDriverKind.make(value));
     setIsManualAcpConfiguration(false);
     setHasAttemptedSubmit(false);

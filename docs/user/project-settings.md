@@ -46,6 +46,20 @@ Settings that are environment-wide stay read-only while a project is selected. W
 targets disagree, a control shows **Mixed** until you choose one value. Appearance, keyboard,
 and other phone-only settings ignore the filter.
 
+## Project memory
+
+Enable **Agent memory** in **Settings → General** on web or desktop, or **Settings → Threads**
+on mobile. It is off by default. Choose a project to override the environment default.
+The change applies when an agent session next starts.
+
+Agents can remember, recall and forget notes shared by providers and threads in that project
+on that environment. Recall matches words, not meaning, and does not automatically add notes
+to every prompt. Agents should not store secrets or temporary task state.
+
+To review or delete notes, select one project and environment in web or desktop settings,
+then open **General → Project memory → Stored memory**. Turning memory off stops new sessions
+from using the tools but keeps saved notes available for review and deletion.
+
 ## Pin and archive projects
 
 Pinned projects come first in the project pickers: the project picker on a new thread, the

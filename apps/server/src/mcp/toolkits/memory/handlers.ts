@@ -1,45 +1,54 @@
+import { OrchestratorMcpFailure } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 
 import * as MemoryService from "../../../memory/MemoryService.ts";
-import * as Orchestrator from "../../../orchestration-v2/Orchestrator.ts";
+import * as ThreadManagement from "../../../orchestration-v2/ThreadManagementService.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
-import { MemoryThreadNotFoundError, MemoryToolkit } from "./tools.ts";
+import * as McpToolAccess from "../../McpToolAccess.ts";
+import { MemoryToolkit } from "./tools.ts";
 
-const make = Effect.gen(function* () {
-  const memory = yield* MemoryService.MemoryService;
-  const engine = yield* Orchestrator.OrchestratorV2;
-
-  /** The project always comes from the credential's thread, never from tool input. */
-  const authority = Effect.gen(function* () {
-    const scope = yield* McpInvocationContext.requireMcpCapability("memory");
-    // Only provider sessions T3 Code launched have a thread, and so a project.
-    const threadId = scope.thread?.threadId;
-    if (threadId === undefined) {
-      return yield* new MemoryThreadNotFoundError({ threadId: "(no thread)" });
-    }
-    const thread = yield* engine
-      .getThreadShell(threadId)
-      .pipe(Effect.mapError(() => new MemoryThreadNotFoundError({ threadId })));
-    if (thread === null || thread === undefined) {
-      return yield* new MemoryThreadNotFoundError({ threadId });
-    }
-    return {
-      projectId: thread.projectId,
-      threadId: thread.id,
-    } satisfies MemoryService.MemoryAuthority;
-  });
-
-  return MemoryToolkit.of({
-    memory_remember: (input) =>
-      authority.pipe(Effect.flatMap((caller) => memory.remember(input, caller))),
-    memory_recall: (input) =>
-      authority.pipe(Effect.flatMap((caller) => memory.search(input, caller))),
-    memory_forget: (input) =>
-      authority.pipe(
-        Effect.flatMap((caller) => memory.forget(input, caller)),
-        Effect.map((forgotten) => ({ forgotten })),
-      ),
-  });
+const authority = Effect.gen(function* () {
+  const scope = yield* McpInvocationContext.requireMcpCapability("memory");
+  const { thread } = yield* McpInvocationContext.requireThreadScope(scope, "Project memory");
+  const threads = yield* ThreadManagement.ThreadManagementService;
+  const shell = yield* threads.getThreadShell(thread.threadId).pipe(
+    Effect.mapError(
+      () =>
+        new OrchestratorMcpFailure({
+          code: "thread_not_found",
+          message: "The calling thread was not found.",
+        }),
+    ),
+  );
+  if (shell === null || shell.deletedAt !== null) {
+    return yield* new OrchestratorMcpFailure({
+      code: "thread_not_found",
+      message: "The calling thread was not found.",
+    });
+  }
+  return { projectId: shell.projectId, threadId: shell.id } satisfies MemoryService.MemoryAuthority;
 });
 
-export const MemoryToolkitHandlersLive = MemoryToolkit.toLayer(make);
+export const layer = McpToolAccess.toLayer(MemoryToolkit, {
+  memory_remember: McpToolAccess.actsAsCaller((input) =>
+    Effect.gen(function* () {
+      const caller = yield* authority;
+      const memory = yield* MemoryService.MemoryService;
+      return yield* memory.remember(input, caller);
+    }),
+  ),
+  memory_recall: McpToolAccess.readsAsCaller((input) =>
+    Effect.gen(function* () {
+      const caller = yield* authority;
+      const memory = yield* MemoryService.MemoryService;
+      return yield* memory.search(input, caller);
+    }),
+  ),
+  memory_forget: McpToolAccess.actsAsCaller((input) =>
+    Effect.gen(function* () {
+      const caller = yield* authority;
+      const memory = yield* MemoryService.MemoryService;
+      return { forgotten: yield* memory.forget(input, caller) };
+    }),
+  ),
+});

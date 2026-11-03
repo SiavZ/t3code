@@ -4,9 +4,8 @@ import { PositiveInt, ProjectId, ThreadId, TrimmedNonEmptyString } from "./baseS
 
 const boundedText = (max: number) => TrimmedNonEmptyString.check(Schema.isMaxLength(max));
 
-export const MEMORY_CONTENT_MAX_LENGTH = 4_000;
-export const MEMORY_RESULT_LIMIT_MAX = 20;
-/** Characters of entry content returned by one recall or search, across all entries. */
+const MEMORY_CONTENT_MAX_LENGTH = 4_000;
+const MEMORY_RESULT_LIMIT_MAX = 20;
 export const MEMORY_RESULT_CHARACTER_BUDGET = 16_000;
 
 export const MemoryEntryId = TrimmedNonEmptyString.pipe(Schema.brand("MemoryEntryId"));
@@ -50,7 +49,7 @@ export const MemoryQueryInput = Schema.Struct({
 export type MemoryQueryInput = typeof MemoryQueryInput.Type;
 
 export const MemoryForgetInput = Schema.Struct({
-  id: MemoryEntryId.annotate({ description: "The id of an entry from recall or search." }),
+  id: MemoryEntryId.annotate({ description: "The id of an entry from recall." }),
 });
 export type MemoryForgetInput = typeof MemoryForgetInput.Type;
 
@@ -63,23 +62,18 @@ export const MemoryQueryResult = Schema.Struct({
 export type MemoryQueryResult = typeof MemoryQueryResult.Type;
 
 export const MemoryListInput = Schema.Struct({ projectId: ProjectId });
-export type MemoryListInput = typeof MemoryListInput.Type;
-
 export const MemoryListResult = Schema.Struct({
   entries: Schema.Array(MemoryEntry),
   truncated: Schema.Boolean,
 });
-export type MemoryListResult = typeof MemoryListResult.Type;
-
 export const MemoryDeleteInput = Schema.Struct({ projectId: ProjectId, id: MemoryEntryId });
-export type MemoryDeleteInput = typeof MemoryDeleteInput.Type;
-
 export const MemoryDeleteResult = Schema.Struct({ deleted: Schema.Boolean });
-export type MemoryDeleteResult = typeof MemoryDeleteResult.Type;
 
 export class MemoryStorageError extends Schema.TaggedError<MemoryStorageError>()(
   "MemoryStorageError",
-  { cause: Schema.Defect() },
+  {
+    cause: Schema.Defect(),
+  },
 ) {
   override get message(): string {
     return "Project memory could not be read or written.";

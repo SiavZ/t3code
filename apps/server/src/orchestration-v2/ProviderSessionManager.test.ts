@@ -740,6 +740,8 @@ function runBrowserAccessScenario(input: {
   readonly enableAgentBrowserAccess: boolean;
   readonly projectOverride: boolean;
   readonly deviceOverride?: boolean;
+  readonly memoryDefault?: boolean;
+  readonly memoryOverride?: boolean;
   readonly createThread?: boolean;
   readonly projectExists?: boolean;
   readonly delegatedBy?: ThreadId;
@@ -794,12 +796,16 @@ function runBrowserAccessScenario(input: {
           projectServiceLayer: layerProjectService,
           serverSettingsLayer: ServerSettings.layerTest({
             enableAgentBrowserAccess: input.enableAgentBrowserAccess,
+            enableAgentMemoryAccess: input.memoryDefault ?? false,
             projectSettingsOverrides: {
               [projectId]: {
                 enableAgentBrowserAccess: input.projectOverride,
                 ...(input.deviceOverride === undefined
                   ? {}
                   : { enableAgentDeviceAccess: input.deviceOverride }),
+                ...(input.memoryOverride === undefined
+                  ? {}
+                  : { enableAgentMemoryAccess: input.memoryOverride }),
               },
             },
           }),
@@ -3949,4 +3955,26 @@ it.effect("ProviderSessionManagerV2 gives a delegated child its project's device
     });
     assert.isTrue(child?.capabilities?.has("device"));
   }),
+);
+
+it.effect.each([
+  { name: "off by default", global: false, override: undefined, exists: true, expected: false },
+  { name: "environment opt-in", global: true, override: undefined, exists: true, expected: true },
+  { name: "project opt-in", global: false, override: true, exists: true, expected: true },
+  { name: "project opt-out", global: true, override: false, exists: true, expected: false },
+  { name: "missing project", global: true, override: true, exists: false, expected: false },
+])(
+  "ProviderSessionManagerV2 grants memory for $name independently of browser access",
+  ({ global, override, exists, expected }) =>
+    Effect.gen(function* () {
+      const captured = yield* runBrowserAccessScenario({
+        enableAgentBrowserAccess: false,
+        projectOverride: false,
+        memoryDefault: global,
+        ...(override === undefined ? {} : { memoryOverride: override }),
+        projectExists: exists,
+      });
+      assert.strictEqual(captured?.capabilities?.has("memory"), expected);
+      assert.isFalse(captured?.browserToolsAvailable);
+    }),
 );

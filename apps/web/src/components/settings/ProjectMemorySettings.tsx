@@ -1,3 +1,4 @@
+import { useAtomValue } from "@effect/atom-react";
 import type { EnvironmentId, MemoryEntry, ProjectId } from "@t3tools/contracts";
 import {
   isAtomCommandInterrupted,
@@ -10,7 +11,11 @@ import { serverEnvironment } from "../../state/server";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { Button } from "../ui/button";
 import { toastManager } from "../ui/toast";
-import { SettingsRow } from "./settingsLayout";
+import { ScopedSwitch } from "./ScopedSwitch";
+import { useSettingsScope } from "./SettingsScopeContext";
+import { SettingsRow, SettingsSection } from "./settingsLayout";
+import { searchableSetting } from "./settingsSearch";
+import { useScopedSettings, useUpdateScopedSettings } from "./useScopedSettings";
 
 const createdAtFormatter = new Intl.DateTimeFormat(undefined, {
   dateStyle: "medium",
@@ -27,11 +32,44 @@ function reportFailure(title: string, result: AtomCommandResult<unknown, unknown
   });
 }
 
-/**
- * What agents remembered in one project on one environment, with delete. Loads on request so
- * opening settings never reads memory the user did not ask to see.
- */
-export function ProjectMemorySettings(props: {
+export function MemorySettings() {
+  const { targets, scope } = useSettingsScope();
+  const settings = useScopedSettings();
+  const updateSettings = useUpdateScopedSettings();
+  const target = targets.length === 1 ? targets[0] : undefined;
+  const projectScope = scope.kind === "project" || scope.kind === "checkout";
+  return (
+    <SettingsSection title="Project memory">
+      <SettingsRow
+        serverScoped
+        settingKeys={["enableAgentMemoryAccess"]}
+        {...searchableSetting("agent-memory-access")}
+        description="Let agents remember and recall project notes across threads and providers. Applies when the agent session next starts. Projects can override it."
+        control={
+          <ScopedSwitch
+            settingKeys={["enableAgentMemoryAccess"]}
+            aria-label="Agent memory"
+            checked={settings.enableAgentMemoryAccess}
+            onCheckedChange={(enabled) => updateSettings({ enableAgentMemoryAccess: enabled })}
+          />
+        }
+      />
+      {projectScope && target?.projectId ? (
+        <ProjectMemorySettings
+          key={`${target.environmentId}:${target.projectId}`}
+          environmentId={target.environmentId}
+          projectId={target.projectId}
+        />
+      ) : (
+        <p className="text-sm text-muted-foreground">
+          Choose one project and environment to review stored memory.
+        </p>
+      )}
+    </SettingsSection>
+  );
+}
+
+function ProjectMemorySettings(props: {
   readonly environmentId: EnvironmentId;
   readonly projectId: ProjectId;
 }) {
@@ -39,6 +77,10 @@ export function ProjectMemorySettings(props: {
   const [truncated, setTruncated] = useState(false);
   const [loading, setLoading] = useState(false);
   const [deletingId, setDeletingId] = useState<string | null>(null);
+  const canRead = useAtomValue(serverEnvironment.listMemory.permissionAtom(props.environmentId));
+  const canDelete = useAtomValue(
+    serverEnvironment.deleteMemory.permissionAtom(props.environmentId),
+  );
   const listMemory = useAtomCommand(serverEnvironment.listMemory, { reportFailure: false });
   const deleteMemory = useAtomCommand(serverEnvironment.deleteMemory, { reportFailure: false });
 
@@ -52,9 +94,7 @@ export function ProjectMemorySettings(props: {
     if (result._tag === "Success") {
       setEntries(result.value.entries);
       setTruncated(result.value.truncated);
-      return;
-    }
-    reportFailure("Could not load project memory", result);
+    } else reportFailure("Could not load project memory", result);
   };
 
   const remove = async (entry: MemoryEntry) => {
@@ -66,9 +106,7 @@ export function ProjectMemorySettings(props: {
     setDeletingId(null);
     if (result._tag === "Success") {
       setEntries((current) => current?.filter((candidate) => candidate.id !== entry.id) ?? null);
-      return;
-    }
-    reportFailure("Could not delete the memory entry", result);
+    } else reportFailure("Could not delete the memory entry", result);
   };
 
   return (
@@ -87,7 +125,7 @@ export function ProjectMemorySettings(props: {
             type="button"
             size="sm"
             variant="outline"
-            disabled={loading}
+            disabled={loading || deletingId !== null || !canRead}
             onClick={() => void load()}
           >
             {loading ? "Loading…" : entries === null ? "Show" : "Refresh"}
@@ -104,7 +142,7 @@ export function ProjectMemorySettings(props: {
               type="button"
               size="sm"
               variant="destructive-outline"
-              disabled={deletingId !== null}
+              disabled={loading || deletingId !== null || !canDelete}
               aria-label="Delete memory entry"
               onClick={() => void remove(entry)}
             >
