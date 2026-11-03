@@ -10,7 +10,7 @@ const Module = require("node:module");
 const os = require("node:os");
 const path = require("node:path");
 
-const checkout = path.resolve(__dirname, "..", "..");
+const checkout = path.resolve(__dirname, "..", "..", "..");
 const tokenUrl = "http://localhost:5733/pair#token=SECRET_123";
 
 function loadExtension(options = {}) {

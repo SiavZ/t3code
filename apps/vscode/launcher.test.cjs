@@ -96,9 +96,11 @@ test("Stop during startup cancels it, and the next start waits for that runner t
   const second = launcher.start();
   assert.notEqual(second, first);
   assert.equal(launcher.status, "starting");
+  // oxlint-disable-next-line t3code/no-real-time-wait-in-tests -- a zero-delay macrotask boundary, not a wait for time
   await new Promise((resolve) => setImmediate(resolve));
   assert.deepEqual(order, ["spawn"]);
   exits[0]();
+  // oxlint-disable-next-line t3code/no-real-time-wait-in-tests -- a zero-delay macrotask boundary, not a wait for time
   await new Promise((resolve) => setImmediate(resolve));
   assert.deepEqual(order, ["spawn", "first runner exited", "spawn"]);
   launcher.child.stdout.emit("data", `pairingUrl: ${tokenUrl}\n`);
@@ -261,9 +263,14 @@ test("stops the runner an earlier extension host left behind before starting a n
   const record = memoryRecord({ pid: 9001 }, (entry) => entry.pid === 9001);
   const child = processFixture();
   const order = [];
+  let releaseOrphan;
+  const orphanReleased = new Promise((resolve) => (releaseOrphan = resolve));
+  let spawned;
+  const spawnedOnce = new Promise((resolve) => (spawned = resolve));
   const launcher = new SourceLauncher(root, {
     spawnProcess: () => {
       order.push("spawn");
+      spawned();
       return child;
     },
     stopProcess: () => {},
@@ -271,7 +278,7 @@ test("stops the runner an earlier extension host left behind before starting a n
       ...record.api,
       stopGroup: async (pid) => {
         record.api.stopGroup(pid);
-        await new Promise((resolve) => setTimeout(resolve, 10));
+        await orphanReleased;
         order.push("orphan stopped");
       },
     },
@@ -279,7 +286,9 @@ test("stops the runner an earlier extension host left behind before starting a n
   const start = launcher.start();
   assert.equal(launcher.status, "starting");
   assert.equal(launcher.start(), start);
-  await new Promise((resolve) => setTimeout(resolve, 30));
+  assert.deepEqual(order, []);
+  releaseOrphan();
+  await spawnedOnce;
   assert.deepEqual(order, ["orphan stopped", "spawn"]);
   assert.deepEqual(record.stopped, [9001]);
   assert.deepEqual(record.value, { pid: child.pid });

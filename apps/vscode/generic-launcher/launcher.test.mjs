@@ -15,7 +15,7 @@ const {
   redactOutputLine,
 } = require("./launcher.cjs");
 
-const root = path.resolve(__dirname, "..", "..");
+const root = path.resolve(__dirname, "..", "..", "..");
 const tokenUrl = "http://localhost:5733/pair#token=SECRET_123";
 
 /** In-memory runner record, so tests never write into the checkout's real dev state. */

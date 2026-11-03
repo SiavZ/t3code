@@ -36,6 +36,7 @@ test("revealing the T3 Activity Bar opens the persistent Pi URL", async () => {
   });
   module.exports.activate({ subscriptions: [] });
   reveal({ visible: true });
+  // oxlint-disable-next-line t3code/no-real-time-wait-in-tests -- a zero-delay macrotask boundary, not a wait for time
   await new Promise((resolve) => setImmediate(resolve));
   assert.deepEqual(opened, ["http://192.168.50.13:3773/"]);
 });

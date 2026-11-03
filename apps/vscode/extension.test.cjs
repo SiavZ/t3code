@@ -35,11 +35,13 @@ function load(integrated) {
     },
     env: { openExternal: async (uri) => opened.push({ url: uri }) },
     Uri: { parse: (value) => value },
+    // oxlint-disable-next-line typescript/no-extraneous-class -- mirrors the VS Code TreeItem API the extension constructs.
     TreeItem: class {
       constructor(label) {
         this.label = label;
       }
     },
+    // oxlint-disable-next-line typescript/no-extraneous-class -- mirrors the VS Code ThemeIcon API the extension constructs.
     ThemeIcon: class {},
   };
   const module = { exports: {} };
