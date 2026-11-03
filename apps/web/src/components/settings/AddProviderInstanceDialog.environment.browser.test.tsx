@@ -193,8 +193,18 @@ describe("AddProviderInstanceDialog environment routing", () => {
         displayName: "Gateway",
         config: { setupMode: "existing" },
         environment: [
-          { name: "OPENAI_BASE_URL", value: "https://gateway.example/v1", sensitive: true },
-          { name: "OPENAI_API_KEY", value: "gateway-secret", sensitive: true },
+          {
+            name: "OPENAI_BASE_URL",
+            value: "https://gateway.example/v1",
+            sensitive: true,
+            valueRedacted: false,
+          },
+          {
+            name: "OPENAI_API_KEY",
+            value: "gateway-secret",
+            sensitive: true,
+            valueRedacted: false,
+          },
         ],
       },
     });
@@ -216,7 +226,7 @@ describe("AddProviderInstanceDialog environment routing", () => {
 
     expect(settingsHooks.mutate).toHaveBeenCalledWith({
       operation: "create",
-      instanceId: "acpRegistry_kilo_custom",
+      instanceId: "acpRegistry_kilo_code",
       instance: expect.not.objectContaining({
         environment: expect.arrayContaining([expect.objectContaining({ name: "OPENAI_API_KEY" })]),
       }),

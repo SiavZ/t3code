@@ -1,3 +1,4 @@
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
 import {
@@ -20,7 +21,7 @@ const projectB = { projectId: ProjectId.make("project-b") };
 const layer = it.layer(
   MemoryService.layer.pipe(
     Layer.provideMerge(Sqlite.layerMemory),
-    Layer.provideMerge(NodeServices.layer),
+    Layer.provideMerge(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
   ),
 );
 

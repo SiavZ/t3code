@@ -11,7 +11,7 @@ import {
   type ThreadId,
 } from "@t3tools/contracts";
 import * as Context from "effect/Context";
-import * as Crypto from "effect/Crypto";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -80,7 +80,7 @@ const ProjectRequest = Schema.Struct({ projectId: Schema.String });
 
 const make = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
-  const crypto = yield* Crypto.Crypto;
+  const random = yield* SecureRandom.SecureRandom;
   const storageError = (cause: unknown) => new MemoryStorageError({ cause });
 
   // Fork build: the table is created here, not by a numbered migration. Upstream owns the migration
@@ -145,7 +145,7 @@ const make = Effect.gen(function* () {
     authority: MemoryAuthority,
   ) {
     const entry: MemoryEntry = {
-      id: MemoryEntryId.make(`mem_${yield* crypto.randomUUIDv4.pipe(Effect.orDie)}`),
+      id: MemoryEntryId.make(`mem_${yield* random.uuidV4()}`),
       projectId: authority.projectId,
       category: input.category,
       content: input.content,
@@ -170,7 +170,7 @@ const make = Effect.gen(function* () {
           `;
         }),
       )
-      .pipe(Effect.catchTag("SqlError", (cause) => Effect.fail(storageError(cause))));
+      .pipe(Effect.catchTags({ SqlError: (cause) => Effect.fail(storageError(cause)) }));
     return entry;
   });
 
