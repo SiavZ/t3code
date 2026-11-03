@@ -1,0 +1,18 @@
+#!/usr/bin/env sh
+# Fork policy: main on origin only moves to commits that passed local CI on this
+# machine. Other branches push freely. See docs/operations/local-ci.md.
+remote="$1"
+[ "$remote" = origin ] || exit 0
+[ "${LOCAL_CI_SKIP:-}" = 1 ] && exit 0
+root=$(git rev-parse --show-toplevel)
+while read -r _local_ref local_sha remote_ref _remote_sha; do
+  [ "$remote_ref" = refs/heads/main ] || continue
+  case "$local_sha" in 0000000000000000000000000000000000000000) continue ;; esac
+  if ! "$root/scripts/local-ci/run.sh" --check "$local_sha"; then
+    echo "pre-push: ${local_sha} has not passed local CI." >&2
+    echo "  Run: scripts/local-ci/run.sh ${local_sha}" >&2
+    echo "  Bypass once: LOCAL_CI_SKIP=1 git push ..." >&2
+    exit 1
+  fi
+done
+exit 0
