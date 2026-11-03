@@ -1,0 +1,86 @@
+{
+  "name": "t3-code-source-dev",
+  "displayName": "T3 Code Source Dev",
+  "version": "0.0.5",
+  "private": true,
+  "description": "Open the T3 Code source checkout in VS Code without a terminal.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/pingdotgg/t3code.git",
+    "directory": "apps/vscode"
+  },
+  "publisher": "t3tools",
+  "main": "./extension.js",
+  "scripts": {
+    "test": "vp test run --config ../../vite.config.ts",
+    "package": "npx --yes @vscode/vsce@4.0.0 package --no-dependencies"
+  },
+  "devDependencies": {
+    "vite-plus": "catalog:"
+  },
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "t3CodeSource",
+          "title": "T3 Code",
+          "icon": "assets/icon.svg"
+        }
+      ]
+    },
+    "views": {
+      "t3CodeSource": [
+        {
+          "id": "t3CodeSource.actions",
+          "name": "T3 Code Source"
+        }
+      ]
+    },
+    "commands": [
+      {
+        "command": "t3CodeSource.open",
+        "title": "T3 Code: Open from Source",
+        "icon": "$(browser)"
+      },
+      {
+        "command": "t3CodeSource.chooseCheckout",
+        "title": "T3 Code: Choose Source Checkout",
+        "icon": "$(folder-opened)"
+      },
+      {
+        "command": "t3CodeSource.stop",
+        "title": "T3 Code: Stop Source Server",
+        "icon": "$(debug-stop)"
+      }
+    ],
+    "configuration": {
+      "title": "T3 Code Source",
+      "properties": {
+        "t3CodeSource.nodePath": {
+          "type": "string",
+          "default": "node",
+          "description": "Node.js executable matching the source checkout's engines.node requirement."
+        }
+      }
+    }
+  },
+  "activationEvents": [
+    "onCommand:t3CodeSource.chooseCheckout",
+    "onCommand:t3CodeSource.open",
+    "onCommand:t3CodeSource.stop",
+    "onView:t3CodeSource.actions"
+  ],
+  "extensionKind": [
+    "workspace"
+  ],
+  "engines": {
+    "vscode": "^1.113.0"
+  },
+  "capabilities": {
+    "untrustedWorkspaces": {
+      "supported": false,
+      "description": "Starting a source checkout executes its development scripts."
+    }
+  }
+}

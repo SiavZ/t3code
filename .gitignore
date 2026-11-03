@@ -48,3 +48,7 @@ node_modules/
 
 # pnpm content-addressable store; never belongs in the repo.
 .pnpm-store/
+
+# Locally built VS Code extension packages
+apps/vscode/*.vsix
+apps/vscode/**/*.vsix
