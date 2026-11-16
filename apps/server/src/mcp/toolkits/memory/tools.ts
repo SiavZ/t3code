@@ -9,7 +9,7 @@ import {
   OrchestratorMcpFailure,
 } from "@t3tools/contracts";
 import * as Schema from "effect/Schema";
-import { Tool, Toolkit } from "effect/ai";
+import { McpSchema, Tool, Toolkit } from "effect/ai";
 
 import * as MemoryService from "../../../memory/MemoryService.ts";
 import * as ThreadManagement from "../../../orchestration-v2/ThreadManagementService.ts";
@@ -42,7 +42,8 @@ const RememberTool = Tool.make("memory_remember", {
   .annotate(Tool.Readonly, false)
   .annotate(Tool.Destructive, false)
   .annotate(Tool.Idempotent, false)
-  .annotate(Tool.OpenWorld, false);
+  .annotate(Tool.OpenWorld, false)
+  .annotate(McpSchema.EnabledWhen, McpInvocationContext.hiddenFromOutsideClients);
 
 const RecallTool = Tool.make("memory_recall", {
   description: `Recall project notes relevant to what you are about to do. Call it at the start of a task with words describing the task. Matching is lexical: entries containing more of your words rank first. ${SCOPE}`,
@@ -55,7 +56,8 @@ const RecallTool = Tool.make("memory_recall", {
   .annotate(Tool.Readonly, true)
   .annotate(Tool.Destructive, false)
   .annotate(Tool.Idempotent, true)
-  .annotate(Tool.OpenWorld, false);
+  .annotate(Tool.OpenWorld, false)
+  .annotate(McpSchema.EnabledWhen, McpInvocationContext.hiddenFromOutsideClients);
 
 const ForgetTool = Tool.make("memory_forget", {
   description: `Delete a project note that is wrong or outdated, by the id that memory_recall returned. forgotten is false when no such note exists in this project. To correct a note, forget it and remember the corrected version. ${SCOPE}`,
@@ -68,6 +70,7 @@ const ForgetTool = Tool.make("memory_forget", {
   .annotate(Tool.Readonly, false)
   .annotate(Tool.Destructive, true)
   .annotate(Tool.Idempotent, true)
-  .annotate(Tool.OpenWorld, false);
+  .annotate(Tool.OpenWorld, false)
+  .annotate(McpSchema.EnabledWhen, McpInvocationContext.hiddenFromOutsideClients);
 
 export const MemoryToolkit = Toolkit.make(RememberTool, RecallTool, ForgetTool);

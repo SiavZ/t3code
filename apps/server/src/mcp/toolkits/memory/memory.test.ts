@@ -84,9 +84,15 @@ layer("memory MCP registration", (it) => {
     "uses the request credential's project on every registered call, never tool input",
     () =>
       Effect.gen(function* () {
-        const saved = yield* call(
+        const injected = yield* call(
           "memory_remember",
           { category: "fact", content: "MCP isolation note", projectId: projectB },
+          scope(threadA),
+        ).pipe(Effect.flip);
+        expect(injected.message).toContain('Unknown argument "projectId"');
+        const saved = yield* call(
+          "memory_remember",
+          { category: "fact", content: "MCP isolation note" },
           scope(threadA),
         );
         expect(saved.isError).toBe(false);
@@ -120,11 +126,6 @@ layer("memory MCP registration", (it) => {
         scope(threadA, false),
         scope(ThreadId.make("missing")),
         scope(ThreadId.make("idle")),
-        {
-          ...scope(threadA),
-          thread: undefined,
-          client: { sessionId: "outside", label: "outside", access: "read-only" as const },
-        },
       ]) {
         const saved = yield* call(
           "memory_remember",
@@ -133,6 +134,16 @@ layer("memory MCP registration", (it) => {
         );
         expect(saved.isError).toBe(true);
       }
+      const external = yield* call(
+        "memory_remember",
+        { category: "fact", content: "must not be saved" },
+        {
+          ...scope(threadA),
+          thread: undefined,
+          client: { sessionId: "outside", label: "outside", access: "read-only" as const },
+        },
+      ).pipe(Effect.flip);
+      expect(external.message).toContain("Tool 'memory_remember' not found");
       expect((yield* call("memory_recall", { query: "note" }, scope(threadA, false))).isError).toBe(
         true,
       );
