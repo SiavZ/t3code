@@ -63,7 +63,7 @@ test_packages() {
   python3 -B .github/scripts/stage-preview-bundle.test.py &&
     node --test .github/scripts/check-nightly-release.test.cjs \
       .github/scripts/vercel-deployment-output.test.cjs \
-      .github/scripts/mobile-preview-comment.test.cjs .github/scripts/test-delta.test.cjs &&
+      .github/scripts/mobile-preview-comment.test.cjs .github/scripts/mobile-ios-preview-record.test.cjs .github/scripts/test-delta.test.cjs &&
     vp run --parallel --concurrency-limit 4 \
       --filter '!t3' --filter '!@t3tools/monorepo' --filter '!@t3tools/web' test
 }
