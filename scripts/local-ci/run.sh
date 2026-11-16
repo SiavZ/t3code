@@ -56,7 +56,7 @@ if ! docker info >/dev/null 2>&1; then
     exit 2
   }
   echo "local-ci: starting the '$profile' Colima VM." >&2
-  colima start --profile "$profile" --cpus 8 --memory 16 --disk 80 >/dev/null 2>&1 || exit 2
+  colima start --profile "$profile" --cpus 8 --memory 16 --disk 80 9>&- >/dev/null 2>&1 || exit 2
   # colima start makes the new VM the default Docker context; keep the user's.
   [[ -n "$previous_context" ]] && docker context use "$previous_context" >/dev/null 2>&1
 fi
