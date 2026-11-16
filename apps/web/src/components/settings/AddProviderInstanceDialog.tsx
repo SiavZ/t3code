@@ -772,6 +772,7 @@ export function AddProviderInstanceDialog({
                         }
                       }
                       secretSources={secretSources}
+                      environmentId={environmentId}
                     />
                   )}
                   {environmentDraftInvalidByDriver[driver] ? (
