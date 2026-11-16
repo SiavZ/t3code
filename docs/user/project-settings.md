@@ -50,16 +50,15 @@ and other phone-only settings ignore the filter.
 
 ## Project memory
 
-Enable **Agent memory** in **Settings → General** on web or desktop, or **Settings → Threads**
-on mobile. It is off by default. Choose a project to override the environment default.
-The change applies when an agent session next starts.
+Enable **Agent memory** in **Settings → Threads**. It is off by default. Choose a project to
+override the environment default. The change applies when an agent session next starts.
 
 Agents can remember, recall and forget notes shared by providers and threads in that project
 on that environment. Recall matches words, not meaning, and does not automatically add notes
 to every prompt. Agents should not store secrets or temporary task state.
 
 To review or delete notes, select one project and environment in web or desktop settings,
-then open **General → Project memory → Stored memory**. Turning memory off stops new sessions
+then open **Threads → Project memory → Stored memory**. Turning memory off stops new sessions
 from using the tools but keeps saved notes available for review and deletion.
 
 ## Pin and archive projects
@@ -210,19 +209,6 @@ selected to override it there) to **Top level only** to stop at the ones the rep
 itself, or **Skip** to leave them for a setup script. It resolves in the same order as the
 workspace default: a `"worktreeSubmodules"` value in the `t3.json` of the branch being checked out
 applies when the project and environment are both on **Inherit**.
-
-## Agent memory
-
-Agent memory gives every provider in a project a shared notebook that lasts across threads.
-Agents save notes such as how to run the tests or a decision you made, and recall them in later
-threads, even when those threads use a different provider. It is off by default. Turn on
-**Agent memory** in **Settings → Integrations**, either for the environment or, with a project
-selected, for that project only. The change applies when an agent session next starts.
-
-Memory belongs to one project on one environment. Other projects never see it, and it does not
-sync between machines. With a project selected, **Stored memory** lists what agents saved, and
-you can delete any entry. Turning memory off hides the tools from agents but keeps the stored
-notes until you delete them.
 
 ## Worktree location
 
