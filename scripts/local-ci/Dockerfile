@@ -7,10 +7,12 @@ ARG NODE_VERSION=26.13.1
 # Keep in step with the playwright version in apps/web and apps/server.
 ARG PLAYWRIGHT_VERSION=1.64.1
 
+# GitHub's runner image already has GTK for Electron and DejaVu, which fontconfig maps
+# `monospace` and `sans-serif` to. Without DejaVu they fall to a CJK font with narrow Latin.
 RUN apt-get update \
   && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-    build-essential ca-certificates curl dbus git jq libsecret-1-dev openssh-client pkg-config \
-    python3 libwayland-dev libxkbcommon-dev xvfb xz-utils \
+    build-essential ca-certificates curl dbus fonts-dejavu-core git jq libgtk-3-0t64 \
+    libsecret-1-dev openssh-client pkg-config python3 libwayland-dev libxkbcommon-dev xvfb xz-utils \
   && arch=$(dpkg --print-architecture | sed 's/amd64/x64/') \
   && curl -fsSL "https://nodejs.org/dist/v${NODE_VERSION}/node-v${NODE_VERSION}-linux-${arch}.tar.xz" \
     | tar -xJ -C /usr/local --strip-components=1 \

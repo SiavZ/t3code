@@ -543,6 +543,17 @@ export const makeAcpPatchedProtocol = Effect.fn("makeAcpPatchedProtocol")(functi
       }),
     }).pipe(Effect.asVoid);
 
+  // A child that exits closes its pipes, so a pipe error may stand in for the exit.
+  // The pipe can also close without an exit; use a live-clock diagnostic grace period.
+  const processExitOr = (pipeError: AcpError.AcpError) =>
+    options.terminationError === undefined
+      ? Effect.succeed(pipeError)
+      : options.terminationError.pipe(
+          Effect.timeoutOption("250 millis"),
+          Effect.provideService(Clock.Clock, Clock.Clock.defaultValue()),
+          Effect.map(Option.getOrElse(() => pipeError)),
+        );
+
   const handleTermination = (classify: () => Effect.Effect<AcpError.AcpError>) =>
     Ref.modify(terminationHandled, (handled) => {
       if (handled) {
@@ -867,16 +878,7 @@ export const makeAcpPatchedProtocol = Effect.fn("makeAcpPatchedProtocol")(functi
         return handleTermination(() => Effect.succeed(normalized));
       },
       onSuccess: () =>
-        handleTermination(() => {
-          const ended = new AcpError.AcpInputStreamEndedError({});
-          if (!options.terminationError) return Effect.succeed(ended);
-          // Stdout can close without process exit; use a live-clock diagnostic grace period.
-          return options.terminationError.pipe(
-            Effect.timeoutOption("250 millis"),
-            Effect.provideService(Clock.Clock, Clock.Clock.defaultValue()),
-            Effect.map(Option.getOrElse(() => ended)),
-          );
-        }),
+        handleTermination(() => processExitOr(new AcpError.AcpInputStreamEndedError({}))),
     }),
     Effect.forkScoped,
   );
@@ -951,7 +953,7 @@ export const makeAcpPatchedProtocol = Effect.fn("makeAcpPatchedProtocol")(functi
             Effect.andThen(
               Cause.hasInterruptsOnly(cause)
                 ? Effect.void
-                : handleTermination(() => Effect.succeed(error)),
+                : handleTermination(() => processExitOr(error)),
             ),
           );
         },

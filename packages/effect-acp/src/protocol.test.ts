@@ -1029,7 +1029,14 @@ it.layer(NodeServices.layer)("effect-acp protocol", (it) => {
     }),
   );
 
-  it.effect("fails current, queued, and future responses when the stdout writer fails", () =>
+  it.effect.each([
+    { case: "while the process runs", exit: undefined },
+    // An exited child breaks stdin; the exit status says why, not the pipe error.
+    {
+      case: "after the process exits",
+      exit: new AcpError.AcpProcessExitedError({ signal: "SIGABRT" }),
+    },
+  ])("fails current, queued, and future responses when the stdout writer fails $case", ({ exit }) =>
     Effect.gen(function* () {
       const writeStarted = yield* Deferred.make<void>();
       const releaseFailure = yield* Deferred.make<void>();
@@ -1049,6 +1056,7 @@ it.layer(NodeServices.layer)("effect-acp protocol", (it) => {
       });
       const transport = yield* AcpProtocol.makeAcpPatchedProtocol({
         stdio,
+        ...(exit === undefined ? {} : { terminationError: Effect.succeed(exit) }),
         serverRequestMethods: new Set(),
         onOutgoingResponseFailure: (requestId) => Queue.offer(failures, requestId),
         onTermination: (error) => Deferred.succeed(terminated, error).pipe(Effect.asVoid),
@@ -1068,7 +1076,9 @@ it.layer(NodeServices.layer)("effect-acp protocol", (it) => {
       assert.isUndefined(current.pollUnsafe());
       assert.isUndefined(queued.pollUnsafe());
       yield* Deferred.succeed(releaseFailure, undefined);
-      assert.instanceOf(yield* Deferred.await(terminated), AcpError.AcpTransportError);
+      const error = yield* Deferred.await(terminated);
+      if (exit === undefined) assert.instanceOf(error, AcpError.AcpTransportError);
+      else assert.strictEqual(error, exit);
       yield* Fiber.join(current);
       yield* Fiber.join(queued);
       yield* send("future");

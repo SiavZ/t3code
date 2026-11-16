@@ -616,8 +616,9 @@ it("a shortcut conditioned on rightPanelOpen sees the thread's open right panel"
 });
 
 it("selecting a side-chat tab focuses that side chat's composer", async () => {
-  const parent = threadWithHistory("focus-parent", 1);
-  // The shell loaded by the file's first test stays; a family read serves side chats added later.
+  // The shell leaves the whole family out, so the route's family read serves all three,
+  // whether the shell is fresh or still the one an earlier test loaded.
+  const parent = { ...threadWithHistory("focus-parent", 1), olderSettled: true as const };
   const sideChat = (name: string) => ({
     ...threadWithHistory(name, 1),
     sideChatOf: parent.id,
