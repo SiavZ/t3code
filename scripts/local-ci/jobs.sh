@@ -53,13 +53,17 @@ lint() {
 build() {
   vpr typecheck &&
     vp run build:desktop &&
-    node apps/desktop/scripts/verify-preload-bundle.mjs
+    node apps/desktop/scripts/verify-preload-bundle.mjs &&
+    xvfb-run -a node scripts/smoke-desktop-app.ts \
+      --executable "$(node -p "require('./apps/desktop/node_modules/electron')")" \
+      --app apps/desktop --artifacts-dir /tmp/desktop-launch-check
 }
 
 test_packages() {
   python3 -B .github/scripts/stage-preview-bundle.test.py &&
     node --test .github/scripts/check-nightly-release.test.cjs \
-      .github/scripts/vercel-deployment-output.test.cjs &&
+      .github/scripts/vercel-deployment-output.test.cjs \
+      .github/scripts/mobile-preview-comment.test.cjs .github/scripts/test-delta.test.cjs &&
     vp run --parallel --concurrency-limit 4 \
       --filter '!t3' --filter '!@t3tools/monorepo' --filter '!@t3tools/web' test
 }

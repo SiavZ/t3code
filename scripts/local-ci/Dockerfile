@@ -3,14 +3,14 @@
 # tools (jq 1.7 fails on empty input, 1.6 does not), so keep the base in step.
 FROM ubuntu:24.04
 
-ARG NODE_VERSION=26.12.1
+ARG NODE_VERSION=26.13.1
 # Keep in step with the playwright version in apps/web and apps/server.
-ARG PLAYWRIGHT_VERSION=1.60.0
+ARG PLAYWRIGHT_VERSION=1.64.1
 
 RUN apt-get update \
   && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
     build-essential ca-certificates curl dbus git jq libsecret-1-dev openssh-client pkg-config \
-    python3 libwayland-dev libxkbcommon-dev xz-utils \
+    python3 libwayland-dev libxkbcommon-dev xvfb xz-utils \
   && arch=$(dpkg --print-architecture | sed 's/amd64/x64/') \
   && curl -fsSL "https://nodejs.org/dist/v${NODE_VERSION}/node-v${NODE_VERSION}-linux-${arch}.tar.xz" \
     | tar -xJ -C /usr/local --strip-components=1 \
