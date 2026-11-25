@@ -16,7 +16,7 @@ import { toastManager } from "../ui/toast";
 import { ScopedSwitch } from "./ScopedSwitch";
 import { useSettingsScope } from "./SettingsScopeContext";
 import { SettingsRow, SettingsSection } from "./settingsLayout";
-import { searchableSetting } from "./settingsSearch";
+import { useSearchableSetting } from "./settingsSearch";
 import { useScopedSettings, useUpdateScopedSettings } from "./useScopedSettings";
 
 const createdAtFormatter = new Intl.DateTimeFormat(undefined, {
@@ -36,6 +36,7 @@ function reportFailure(title: string, result: AtomCommandResult<unknown, unknown
 
 export function MemorySettings() {
   const gt = useGT();
+  const searchableSetting = useSearchableSetting();
   const { targets, scope } = useSettingsScope();
   const settings = useScopedSettings();
   const updateSettings = useUpdateScopedSettings();
