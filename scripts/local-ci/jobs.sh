@@ -47,6 +47,8 @@ lint() {
     vp run knip:check &&
     vp run --filter @t3tools/source-control-github generate --check &&
     vp run --filter t3 generate --check &&
+    vp run --filter @t3tools/issue-tracker-linear generate --check &&
+    vp run i18n:check &&
     vp check
 }
 
@@ -54,6 +56,8 @@ build() {
   vpr typecheck &&
     vp run build:desktop &&
     node apps/desktop/scripts/verify-preload-bundle.mjs &&
+    node apps/server/scripts/cli.ts build-exe &&
+    apps/server/dist-exe/t3 --version &&
     xvfb-run -a node scripts/smoke-desktop-app.ts \
       --executable "$(node -p "require('./apps/desktop/node_modules/electron')")" \
       --app apps/desktop --artifacts-dir /tmp/desktop-launch-check
@@ -63,7 +67,8 @@ test_packages() {
   python3 -B .github/scripts/stage-preview-bundle.test.py &&
     node --test .github/scripts/check-nightly-release.test.cjs \
       .github/scripts/vercel-deployment-output.test.cjs \
-      .github/scripts/mobile-preview-comment.test.cjs .github/scripts/mobile-ios-preview-record.test.cjs .github/scripts/test-delta.test.cjs &&
+      .github/scripts/mobile-preview-comment.test.cjs .github/scripts/mobile-ios-preview-record.test.cjs \
+      .github/scripts/test-delta.test.cjs .github/scripts/workflow-credentials.test.cjs &&
     vp run --parallel --concurrency-limit 4 \
       --filter '!t3' --filter '!@t3tools/monorepo' --filter '!@t3tools/web' test
 }

@@ -6,7 +6,9 @@ import {
   type AtomCommandResult,
 } from "@t3tools/client-runtime/state/runtime";
 import { useState } from "react";
+import { msg, T, useGT } from "gt-react";
 
+import { m } from "../../i18n/messages";
 import { serverEnvironment } from "../../state/server";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { Button } from "../ui/button";
@@ -28,27 +30,30 @@ function reportFailure(title: string, result: AtomCommandResult<unknown, unknown
   toastManager.add({
     type: "error",
     title,
-    description: error instanceof Error ? error.message : "Project memory is unavailable.",
+    description: error instanceof Error ? error.message : m(msg("Project memory is unavailable.")),
   });
 }
 
 export function MemorySettings() {
+  const gt = useGT();
   const { targets, scope } = useSettingsScope();
   const settings = useScopedSettings();
   const updateSettings = useUpdateScopedSettings();
   const target = targets.length === 1 ? targets[0] : undefined;
   const projectScope = scope.kind === "project" || scope.kind === "checkout";
   return (
-    <SettingsSection title="Project memory">
+    <SettingsSection title={gt("Project memory")}>
       <SettingsRow
         serverScoped
         settingKeys={["enableAgentMemoryAccess"]}
         {...searchableSetting("agent-memory-access")}
-        description="Let agents remember and recall project notes across threads and providers. Applies when the agent session next starts. Projects can override it."
+        description={gt(
+          "Let agents remember and recall project notes across threads and providers. Applies when the agent session next starts. Projects can override it.",
+        )}
         control={
           <ScopedSwitch
             settingKeys={["enableAgentMemoryAccess"]}
-            aria-label="Agent memory"
+            aria-label={gt("Agent memory")}
             checked={settings.enableAgentMemoryAccess}
             onCheckedChange={(enabled) => updateSettings({ enableAgentMemoryAccess: enabled })}
           />
@@ -62,7 +67,7 @@ export function MemorySettings() {
         />
       ) : (
         <p className="text-sm text-muted-foreground">
-          Choose one project and environment to review stored memory.
+          <T>Choose one project and environment to review stored memory.</T>
         </p>
       )}
     </SettingsSection>
@@ -73,6 +78,7 @@ function ProjectMemorySettings(props: {
   readonly environmentId: EnvironmentId;
   readonly projectId: ProjectId;
 }) {
+  const gt = useGT();
   const [entries, setEntries] = useState<ReadonlyArray<MemoryEntry> | null>(null);
   const [truncated, setTruncated] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -94,7 +100,7 @@ function ProjectMemorySettings(props: {
     if (result._tag === "Success") {
       setEntries(result.value.entries);
       setTruncated(result.value.truncated);
-    } else reportFailure("Could not load project memory", result);
+    } else reportFailure(gt("Could not load project memory"), result);
   };
 
   const remove = async (entry: MemoryEntry) => {
@@ -106,19 +112,22 @@ function ProjectMemorySettings(props: {
     setDeletingId(null);
     if (result._tag === "Success") {
       setEntries((current) => current?.filter((candidate) => candidate.id !== entry.id) ?? null);
-    } else reportFailure("Could not delete the memory entry", result);
+    } else reportFailure(gt("Could not delete the memory entry"), result);
   };
 
   return (
     <>
       <SettingsRow
-        title="Stored memory"
+        title={gt("Stored memory")}
         description={
           entries === null
-            ? "Review and delete what agents remembered for this project."
+            ? gt("Review and delete what agents remembered for this project.")
             : entries.length === 0
-              ? "Agents have not remembered anything for this project."
-              : `${entries.length}${truncated ? "+" : ""} entries, newest first.`
+              ? gt("Agents have not remembered anything for this project.")
+              : gt("{count}{overflow} entries, newest first.", {
+                  count: entries.length,
+                  overflow: truncated ? "+" : "",
+                })
         }
         control={
           <Button
@@ -128,7 +137,7 @@ function ProjectMemorySettings(props: {
             disabled={loading || deletingId !== null || !canRead}
             onClick={() => void load()}
           >
-            {loading ? "Loading…" : entries === null ? "Show" : "Refresh"}
+            {loading ? gt("Loading…") : entries === null ? gt("Show") : gt("Refresh")}
           </Button>
         }
       />
@@ -143,10 +152,10 @@ function ProjectMemorySettings(props: {
               size="sm"
               variant="destructive-outline"
               disabled={loading || deletingId !== null || !canDelete}
-              aria-label="Delete memory entry"
+              aria-label={gt("Delete memory entry")}
               onClick={() => void remove(entry)}
             >
-              {deletingId === entry.id ? "Deleting…" : "Delete"}
+              {deletingId === entry.id ? gt("Deleting…") : gt("Delete")}
             </Button>
           }
         />
