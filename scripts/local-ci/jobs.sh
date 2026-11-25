@@ -74,7 +74,7 @@ test_packages() {
 }
 
 test_web() {
-  vp run --filter @t3tools/web test &&
+  vp run --filter @t3tools/web test --maxWorkers 2 &&
     vp run --filter @t3tools/web build &&
     node apps/web/scripts/verify-built-boot.ts
 }
