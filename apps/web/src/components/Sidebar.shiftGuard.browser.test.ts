@@ -32,11 +32,10 @@ function mountList(container: HTMLElement, names: readonly string[]) {
 }
 
 // userEvent cannot hold the mouse, so `act` runs inside the real press, after the guard saw it.
-function duringPress(act: () => void) {
-  const listener = () => act();
-  window.addEventListener("pointerdown", listener, { capture: true, once: true });
+function duringPress(act: (event: PointerEvent) => void) {
+  window.addEventListener("pointerdown", act, { capture: true, once: true });
   return {
-    [Symbol.dispose]: () => window.removeEventListener("pointerdown", listener, { capture: true }),
+    [Symbol.dispose]: () => window.removeEventListener("pointerdown", act, { capture: true }),
   };
 }
 
@@ -131,9 +130,9 @@ describe("sidebar shift guard", () => {
 
     list.remove("A");
     list.guard.update();
-    using _hold = duringPress(() => {
+    using _hold = duringPress((event) => {
       window.dispatchEvent(new KeyboardEvent("keydown", { key: "Shift" }));
-      const other = { bubbles: true, pointerId: 9 };
+      const other = { bubbles: true, pointerId: event.pointerId + 1 };
       screen.container.dispatchEvent(new PointerEvent("pointerdown", other));
       screen.container.dispatchEvent(new PointerEvent("pointerup", other));
       vi.advanceTimersByTime(1_000);
