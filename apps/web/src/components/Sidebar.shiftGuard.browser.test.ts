@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vite-plus/test";
-import { userEvent } from "vite-plus/test/browser";
+import { commands, userEvent } from "vite-plus/test/browser";
 import { fakeTimers, render } from "../../test/render";
 import { createSidebarShiftGuard } from "./Sidebar.shiftGuard";
 
@@ -31,7 +31,7 @@ function mountList(container: HTMLElement, names: readonly string[]) {
   };
 }
 
-// userEvent cannot hold the mouse, so `act` runs inside the real press, after the guard saw it.
+// Run the extra input after the guard sees the held press.
 function duringPress(act: (event: PointerEvent) => void) {
   window.addEventListener("pointerdown", act, { capture: true, once: true });
   return {
@@ -137,7 +137,12 @@ describe("sidebar shift guard", () => {
       screen.container.dispatchEvent(new PointerEvent("pointerup", other));
       vi.advanceTimersByTime(1_000);
     });
-    await userEvent.click(list.button("B"));
+    await userEvent.hover(list.button("B"));
+    try {
+      await commands.pointerDown();
+    } finally {
+      await commands.pointerUp();
+    }
     expect(list.pressed).toEqual([]);
   });
 
